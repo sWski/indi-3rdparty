@@ -945,7 +945,7 @@ bool EQMod::ReadScopeStatus()
                        AlignedDEString,
                        AZString,
                        ALString,
-                       pierSide == PIER_EAST ? "East" : (pierSide == PIER_WEST ? "West" : "Uknown"));
+                       pierSide == PIER_EAST ? "East" : (pierSide == PIER_WEST ? "West" : "Unknown"));
         }
 
         if (mount->HasAuxEncoders())
@@ -3185,7 +3185,7 @@ bool EQMod::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
                 if (DEInverted)
                     rate = -rate;
                 mount->SlewDE(rate);
-                TrackState = SCOPE_SLEWING;
+                //TrackState = SCOPE_SLEWING;
                 break;
 
             case MOTION_STOP:
@@ -3233,7 +3233,7 @@ bool EQMod::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
                 if (RAInverted)
                     rate = -rate;
                 mount->SlewRA(rate);
-                TrackState = SCOPE_SLEWING;
+                //TrackState = SCOPE_SLEWING;
                 break;
 
             case MOTION_STOP:

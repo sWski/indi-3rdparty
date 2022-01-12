@@ -53,7 +53,7 @@ data acquisition, monitoring, and a lot more. This is a 3rd party driver.
 
 
 %prep -v
-%setup -n %{name}-%{version}
+%autosetup -v -p1 -n indi-3rdparty-master
 
 %build
 # This package tries to mix and match PIE and PIC which is wrong and will
@@ -74,6 +74,8 @@ make DESTDIR=%{buildroot} install
 %{_datadir}/indi
 
 %changelog
+* Tue Dec 07 2021 Hiroshi Saito <hiro3110g@gmail.com>
+- Update PlayerOneCamera SDK to v2.0.5
 * Sat Aug 21 2021 Hiroshi Saito <hiro3110g@gmail.com>
 - Create
 
