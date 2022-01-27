@@ -1,6 +1,6 @@
 %define __cmake_in_source_build %{_vpath_builddir}
 Name: libapogee
-Version:1.9.4.git
+Version:1.9.5.git
 Release: %(date -u +%%Y%%m%%d%%H%%M%%S)%{?dist}
 Summary: Instrument Neutral Distributed Interface 3rd party drivers
 
@@ -75,7 +75,7 @@ make DESTDIR=%{buildroot} install
 %{_libdir}/*
 %{_includedir}/libapogee
 %{_sysconfdir}/Apogee
-%{_sysconfdir}/udev/rules.d/99-apogee.rules
+/lib/udev/rules.d/99-apogee.rules
 
 
 %changelog

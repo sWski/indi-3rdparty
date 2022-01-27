@@ -1,6 +1,6 @@
 %define __cmake_in_source_build %{_vpath_builddir}
 Name: indi-dsi
-Version:1.9.4.git
+Version:1.9.5.git
 Release: %(date -u +%%Y%%m%%d%%H%%M%%S)%{?dist}
 Summary: Instrument Neutral Distributed Interface 3rd party drivers
 
@@ -71,7 +71,7 @@ make DESTDIR=%{buildroot} install
 %files
 %{_bindir}/*
 %{_datadir}/indi
-/etc/udev/rules.d/99-meadedsi.rules
+/lib/udev/rules.d/99-meadedsi.rules
 /lib/firmware/meade-deepskyimager.hex
 
 
