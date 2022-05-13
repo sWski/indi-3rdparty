@@ -153,12 +153,22 @@ bool ToupBase::initProperties()
     INDI::CCD::initProperties();
 
     ///////////////////////////////////////////////////////////////////////////////////
-    /// Cooler Control
+    /// Binning Mode Control
     ///////////////////////////////////////////////////////////////////////////////////
-    IUFillSwitch(&CoolerS[0], "COOLER_ON", "ON", ISS_OFF);
-    IUFillSwitch(&CoolerS[1], "COOLER_OFF", "OFF", ISS_ON);
-    IUFillSwitchVector(&CoolerSP, CoolerS, 2, getDeviceName(), "CCD_COOLER", "Cooler", MAIN_CONTROL_TAB, IP_WO,
+    IUFillSwitch(&BinningModeS[TC_BINNING_AVG], "TC_BINNING_AVG", "AVG", ISS_OFF);
+    IUFillSwitch(&BinningModeS[TC_BINNING_ADD], "TC_BINNING_ADD", "Add", ISS_ON);
+    IUFillSwitchVector(&BinningModeSP, BinningModeS, 2, getDeviceName(), "CCD_BINNING_MODE", "Binning Mode", IMAGE_SETTINGS_TAB, IP_WO,
                        ISR_1OFMANY, 0, IPS_IDLE);
+
+
+    ///////////////////////////////////////////////////////////////////////////////////
+    /// Cooler Control
+    /// N.B. Some cameras starts with cooling immediately if powered.
+    ///////////////////////////////////////////////////////////////////////////////////
+    IUFillSwitch(&CoolerS[0], "COOLER_ON", "ON", ISS_ON);
+    IUFillSwitch(&CoolerS[1], "COOLER_OFF", "OFF", ISS_OFF);
+    IUFillSwitchVector(&CoolerSP, CoolerS, 2, getDeviceName(), "CCD_COOLER", "Cooler", MAIN_CONTROL_TAB, IP_WO,
+                       ISR_1OFMANY, 0, IPS_BUSY);
 
     ///////////////////////////////////////////////////////////////////////////////////
     /// Controls
@@ -350,6 +360,15 @@ bool ToupBase::initProperties()
 
 bool ToupBase::updateProperties()
 {
+    // Set format first if connected.
+    if (isConnected())
+    {
+        CaptureFormatSP.resize(0);
+        m_CaptureFormats.clear();
+
+
+    }
+
     INDI::CCD::updateProperties();
 
     if (isConnected())
@@ -358,10 +377,7 @@ bool ToupBase::updateProperties()
         setupParams();
 
         if (HasCooler())
-        {
             defineProperty(&CoolerSP);
-            loadConfig(true, "CCD_COOLER");
-        }
         // Even if there is no cooler, we define temperature property as READ ONLY
         else if (m_Instance->model->flag & CP(FLAG_GETTEMPERATURE))
         {
@@ -396,6 +412,10 @@ bool ToupBase::updateProperties()
             defineProperty(&GainConversionNP);
             defineProperty(&GainConversionSP);
         }
+
+        // Binning mode
+        // TODO: Check if Camera supports binning mode
+        defineProperty(&BinningModeSP);
 
         // Levels
         defineProperty(&LevelRangeNP);
@@ -447,6 +467,7 @@ bool ToupBase::updateProperties()
             deleteProperty(GainConversionSP.name);
         }
 
+        deleteProperty(BinningModeSP.name);
         deleteProperty(LevelRangeNP.name);
         deleteProperty(BlackBalanceNP.name);
         deleteProperty(OffsetNP.name);
@@ -615,6 +636,8 @@ void ToupBase::setupParams()
         rc = FP(put_Option(m_CameraHandle, CP(OPTION_RAW), 1));
         LOGF_DEBUG("OPTION_RAW 1. rc: %s", errorCodes[rc].c_str());
 
+        CaptureFormat mono16 = {"INDI_MONO_16", "Mono 16", 16, false};
+        CaptureFormat mono8 = {"INDI_MONO_8", "Mono 8", 8, false};
         if (m_Instance->model->flag & RAW_SUPPORTED)
         {
             // enable bitdepth
@@ -623,17 +646,21 @@ void ToupBase::setupParams()
             m_BitsPerPixel = 16;
             VideoFormatS[TC_VIDEO_MONO_16].s = ISS_ON;
             m_CurrentVideoFormat = TC_VIDEO_MONO_16;
+            mono16.isDefault = true;
         }
         else
         {
             m_BitsPerPixel = 8;
             VideoFormatS[TC_VIDEO_MONO_8].s = ISS_ON;
             m_CurrentVideoFormat = TC_VIDEO_MONO_8;
+            mono8.isDefault = true;
         }
 
         m_CameraPixelFormat = INDI_MONO;
         m_Channels = 1;
 
+        addCaptureFormat(mono8);
+        addCaptureFormat(mono16);
         LOGF_DEBUG("Bits Per Pixel: %d Video Mode: %s", m_BitsPerPixel,
                    VideoFormatS[TC_VIDEO_MONO_8].s == ISS_ON ? "Mono 8-bit" : "Mono 16-bit");
     }
@@ -655,12 +682,16 @@ void ToupBase::setupParams()
         rc = FP(get_Option(m_CameraHandle, CP(OPTION_RAW), &cameraDataMode));
         LOGF_DEBUG("OPTION_RAW. rc: %s Value: %d", errorCodes[rc].c_str(), cameraDataMode);
 
+        CaptureFormat rgb = {"INDI_RGB", "RGB", 8};
+        CaptureFormat raw = {"INDI_RAW", m_RAWHighDepthSupport ? "RAW 16" : "RAW 8", static_cast<uint8_t>(m_RAWHighDepthSupport ? 16 : 8)};
+
         // Color RAW
         if (cameraDataMode == TC_VIDEO_COLOR_RAW)
         {
             VideoFormatS[TC_VIDEO_COLOR_RAW].s = ISS_ON;
             m_Channels = 1;
             LOG_INFO("Video Mode RAW detected.");
+            raw.isDefault = true;
 
             // Get RAW Format
             IUSaveText(&BayerT[2], getBayerString());
@@ -685,11 +716,15 @@ void ToupBase::setupParams()
             m_Channels = 3;
             m_CameraPixelFormat = INDI_RGB;
             m_BitsPerPixel = 8;
+            rgb.isDefault = true;
 
             // Disable Bayer until we switch to raw mode
             if (m_RAWFormatSupport)
                 SetCCDCapability(GetCCDCapability() & ~CCD_HAS_BAYER);
         }
+
+        addCaptureFormat(rgb);
+        addCaptureFormat(raw);
 
         LOGF_DEBUG("Bits Per Pixel: %d Video Mode: %s", m_BitsPerPixel,
                    VideoFormatS[TC_VIDEO_COLOR_RGB].s == ISS_ON ? "RGB" : "RAW");
@@ -1293,6 +1328,23 @@ bool ToupBase::ISNewSwitch(const char *dev, const char *name, ISState * states, 
 {
     if (dev != nullptr && !strcmp(dev, getDeviceName()))
     {
+
+        //////////////////////////////////////////////////////////////////////
+        /// Binning Mode Control
+        //////////////////////////////////////////////////////////////////////
+        if (!strcmp(name, BinningModeSP.name))
+        {
+            IUUpdateSwitch(&BinningModeSP, states, names, n);
+            auto mode = (BinningModeS[TC_BINNING_AVG].s == ISS_ON) ? TC_BINNING_AVG : TC_BINNING_ADD;
+            m_BinningMode = mode;
+            updateBinningMode(PrimaryCCD.getBinX(), mode);
+            LOGF_DEBUG("Set Binning Mode %s", mode == TC_BINNING_AVG ? "AVG" : "ADD");
+            saveConfig(true, BinningModeSP.name);
+            return true;
+        }
+
+
+
         //////////////////////////////////////////////////////////////////////
         /// Cooler Control
         //////////////////////////////////////////////////////////////////////
@@ -1305,11 +1357,8 @@ bool ToupBase::ISNewSwitch(const char *dev, const char *name, ISState * states, 
                 return true;
             }
 
-            if (CoolerS[TC_COOLER_ON].s == ISS_ON)
-                activateCooler(true);
-            else
-                activateCooler(false);
-
+            activateCooler(CoolerS[TC_COOLER_ON].s == ISS_ON);
+            saveConfig(true, CoolerSP.name);
             return true;
         }
 
@@ -1421,8 +1470,6 @@ bool ToupBase::ISNewSwitch(const char *dev, const char *name, ISState * states, 
         //////////////////////////////////////////////////////////////////////
         if (!strcmp(name, VideoFormatSP.name))
         {
-            int rc = 0;
-
             if (Streamer->isBusy())
             {
                 VideoFormatSP.s = IPS_ALERT;
@@ -1431,120 +1478,9 @@ bool ToupBase::ISNewSwitch(const char *dev, const char *name, ISState * states, 
                 return true;
             }
 
-            int prevIndex = IUFindOnSwitchIndex(&VideoFormatSP);
             IUUpdateSwitch(&VideoFormatSP, states, names, n);
             int currentIndex = IUFindOnSwitchIndex(&VideoFormatSP);
-
-            m_Channels = 1;
-            m_BitsPerPixel = 8;
-
-            // Mono
-            if (m_MonoCamera)
-            {
-                if (m_MaxBitDepth == 8 && currentIndex == TC_VIDEO_MONO_16)
-                {
-                    VideoFormatSP.s = IPS_ALERT;
-                    LOG_ERROR("Only 8-bit format is supported.");
-                    IUResetSwitch(&VideoFormatSP);
-                    VideoFormatS[prevIndex].s = ISS_ON;
-                    IDSetSwitch(&VideoFormatSP, nullptr);
-                    return true;
-                }
-
-                // We need to stop camera first
-                LOG_DEBUG("Stopping camera to change video mode.");
-                FP(Stop(m_CameraHandle));
-
-                rc = FP(put_Option(m_CameraHandle, CP(OPTION_BITDEPTH), currentIndex));
-                if (FAILED(rc))
-                {
-                    LOGF_ERROR("Failed to set high bit depth mode %s", errorCodes[rc].c_str());
-                    VideoFormatSP.s = IPS_ALERT;
-                    IUResetSwitch(&VideoFormatSP);
-                    VideoFormatS[prevIndex].s = ISS_ON;
-                    IDSetSwitch(&VideoFormatSP, nullptr);
-
-                    // Restart Capture
-                    FP(StartPullModeWithCallback(m_CameraHandle, &ToupBase::eventCB, this));
-                    LOG_DEBUG("Restarting event callback after video mode change failed.");
-
-                    return true;
-                }
-                else
-                    LOGF_DEBUG("Set OPTION_BITDEPTH --> %d", currentIndex);
-
-                m_BitsPerPixel = (currentIndex == TC_VIDEO_MONO_8) ? 8 : 16;
-            }
-            // Color
-            else
-            {
-                // Check if raw format is supported.
-                if (currentIndex == TC_VIDEO_COLOR_RAW && m_RAWFormatSupport == false)
-                {
-                    VideoFormatSP.s = IPS_ALERT;
-                    IUResetSwitch(&VideoFormatSP);
-                    VideoFormatS[prevIndex].s = ISS_ON;
-                    LOG_ERROR("RAW format is not supported.");
-                    IDSetSwitch(&VideoFormatSP, nullptr);
-                    return true;
-                }
-
-                // We need to stop camera first
-                LOG_DEBUG("Stopping camera to change video mode.");
-                FP(Stop(m_CameraHandle));
-
-                rc = FP(put_Option(m_CameraHandle, CP(OPTION_RAW), currentIndex));
-                if (FAILED(rc))
-                {
-                    LOGF_ERROR("Failed to set video mode: %s", errorCodes[rc].c_str());
-                    VideoFormatSP.s = IPS_ALERT;
-                    IUResetSwitch(&VideoFormatSP);
-                    VideoFormatS[prevIndex].s = ISS_ON;
-                    IDSetSwitch(&VideoFormatSP, nullptr);
-
-                    // Restart Capture
-                    FP(StartPullModeWithCallback(m_CameraHandle, &ToupBase::eventCB, this));
-                    LOG_DEBUG("Restarting event callback after changing video mode failed.");
-
-                    return true;
-                }
-                else
-                    LOGF_DEBUG("Set OPTION_RAW --> %d", currentIndex);
-
-                if (currentIndex == TC_VIDEO_COLOR_RGB)
-                {
-                    m_Channels = 3;
-                    m_BitsPerPixel = 8;
-                    // Disable Bayer if supported.
-                    if (m_RAWFormatSupport)
-                        SetCCDCapability(GetCCDCapability() & ~CCD_HAS_BAYER);
-                }
-                else
-                {
-                    SetCCDCapability(GetCCDCapability() | CCD_HAS_BAYER);
-                    IUSaveText(&BayerT[2], getBayerString());
-                    IDSetText(&BayerTP, nullptr);
-                    m_BitsPerPixel = m_RawBitsPerPixel;
-                }
-            }
-
-            m_CurrentVideoFormat = currentIndex;
-            m_BitsPerPixel = (m_BitsPerPixel > 8) ? 16 : 8;
-
-            LOGF_DEBUG("Video Format: %d m_BitsPerPixel: %d", currentIndex, m_BitsPerPixel);
-
-            // Allocate memory
-            allocateFrameBuffer();
-
-            VideoFormatSP.s = IPS_OK;
-            IDSetSwitch(&VideoFormatSP, nullptr);
-
-            // Restart Capture
-            FP(StartPullModeWithCallback(m_CameraHandle, &ToupBase::eventCB, this));
-            LOG_DEBUG("Restarting event callback after video mode change.");
-
-            saveConfig(true, VideoFormatSP.name);
-
+            setVideoFormat(currentIndex);
             return true;
         }
 
@@ -2054,6 +1990,9 @@ bool ToupBase::UpdateCCDFrame(int x, int y, int w, int h)
     // Set UNBINNED coords
     PrimaryCCD.setFrame(x, y, w, h);
 
+    // As proposed by Max in INDI forum, increase download estimation after changing ROI since next
+    // frame may take longer to download.
+    m_DownloadEstimation = 10000;
 
     // Total bytes required for image buffer
     uint32_t nbuf = (w * h * PrimaryCCD.getBPP() / 8) * m_Channels;
@@ -2065,6 +2004,30 @@ bool ToupBase::UpdateCCDFrame(int x, int y, int w, int h)
     return true;
 }
 
+bool ToupBase::updateBinningMode(int binx, int mode)
+{
+    int binningMode = binx;
+
+    if ((mode == TC_BINNING_AVG) && (binx > 1))
+    {
+        binningMode = binx | 0x80;
+    }
+    LOGF_DEBUG("binningMode code to set: 0x%x", binningMode);
+
+    HRESULT rc = FP(put_Option(m_CameraHandle, CP(OPTION_BINNING), binningMode));
+    if (FAILED(rc))
+    {
+        LOGF_ERROR("Binning %dx%d with Option 0x%x is not support. %s", binx, binx, binningMode, errorCodes[rc].c_str());
+        return false;
+    }
+
+    PrimaryCCD.setBin(binx, binx);
+
+
+    return UpdateCCDFrame(PrimaryCCD.getSubX(), PrimaryCCD.getSubY(), PrimaryCCD.getSubW(), PrimaryCCD.getSubH());;
+
+}
+
 bool ToupBase::UpdateCCDBin(int binx, int biny)
 {
     //    if (binx > 4)
@@ -2072,17 +2035,13 @@ bool ToupBase::UpdateCCDBin(int binx, int biny)
     //        LOG_ERROR("Only 1x1, 2x2, 3x3, and 4x4 modes are supported.");
     //        return false;
     //    }
-
-    // TODO add option to select between additive vs. average binning
-    HRESULT rc = FP(put_Option(m_CameraHandle, CP(OPTION_BINNING), binx));
-    if (FAILED(rc))
+    if (binx != biny)
     {
-        LOGF_ERROR("Binning %dx%d is not support. %s", binx, biny, errorCodes[rc].c_str());
+        LOG_ERROR("Binning dimensions must be equal");
         return false;
     }
-    PrimaryCCD.setBin(binx, binx);
 
-    return UpdateCCDFrame(PrimaryCCD.getSubX(), PrimaryCCD.getSubY(), PrimaryCCD.getSubW(), PrimaryCCD.getSubH());
+    return updateBinningMode(binx, m_BinningMode);
 }
 
 // The generic timer call back is used for temperature monitoring
@@ -2347,6 +2306,7 @@ bool ToupBase::saveConfigItems(FILE * fp)
 
     IUSaveConfigSwitch(fp, &VideoFormatSP);
     IUSaveConfigSwitch(fp, &ResolutionSP);
+    IUSaveConfigSwitch(fp, &BinningModeSP);
 
     if (m_HasLowNoise)
         IUSaveConfigSwitch(fp, &LowNoiseSP);
@@ -2425,6 +2385,12 @@ void ToupBase::pushCallback(const void* pData, const XP(FrameInfoV2)* pInfo, int
         timersub(&curtime, &ExposureEnd, &diff);
         m_DownloadEstimation = diff.tv_sec * 1000 + diff.tv_usec / 1e3;
         LOGF_DEBUG("New download estimate %.f ms", m_DownloadEstimation);
+
+        if (m_DownloadEstimation < MIN_DOWNLOAD_ESTIMATION)
+        {
+            m_DownloadEstimation = MIN_DOWNLOAD_ESTIMATION;
+            LOGF_DEBUG("Too low download estimate. Bumping to %.f ms", m_DownloadEstimation);
+        }
 
         InExposure  = false;
         PrimaryCCD.setExposureLeft(0);
@@ -2508,6 +2474,12 @@ void ToupBase::eventPullCallBack(unsigned event)
                 gettimeofday(&curtime, nullptr);
                 timersub(&curtime, &ExposureEnd, &diff);
                 m_DownloadEstimation = diff.tv_sec * 1000 + diff.tv_usec / 1e3;
+
+                if (m_DownloadEstimation < MIN_DOWNLOAD_ESTIMATION)
+                {
+                    m_DownloadEstimation = MIN_DOWNLOAD_ESTIMATION;
+                    LOGF_DEBUG("Too low download estimate. Bumping to %.f ms", m_DownloadEstimation);
+                }
 
                 m_TimeoutRetries = 0;
                 XP(FrameInfoV2) info;
@@ -2724,4 +2696,126 @@ void ToupBase::eventPullCallBack(unsigned event)
         default:
             break;
     }
+}
+
+bool ToupBase::setVideoFormat(uint8_t index)
+{
+    if (index == IUFindOnSwitchIndex(&VideoFormatSP))
+        return true;
+
+    m_Channels = 1;
+    m_BitsPerPixel = 8;
+    // Mono
+    if (m_MonoCamera)
+    {
+        if (m_MaxBitDepth == 8 && index == TC_VIDEO_MONO_16)
+        {
+            VideoFormatSP.s = IPS_ALERT;
+            LOG_ERROR("Only 8-bit format is supported.");
+            IUResetSwitch(&VideoFormatSP);
+            VideoFormatS[TC_VIDEO_MONO_8].s = ISS_ON;
+            IDSetSwitch(&VideoFormatSP, nullptr);
+            return false;
+        }
+
+        // We need to stop camera first
+        LOG_DEBUG("Stopping camera to change video mode.");
+        FP(Stop(m_CameraHandle));
+
+        int rc = FP(put_Option(m_CameraHandle, CP(OPTION_BITDEPTH), index));
+        if (FAILED(rc))
+        {
+            LOGF_ERROR("Failed to set high bit depth mode %s", errorCodes[rc].c_str());
+            VideoFormatSP.s = IPS_ALERT;
+            IUResetSwitch(&VideoFormatSP);
+            VideoFormatS[TC_VIDEO_MONO_8].s = ISS_ON;
+            IDSetSwitch(&VideoFormatSP, nullptr);
+
+            // Restart Capture
+            FP(StartPullModeWithCallback(m_CameraHandle, &ToupBase::eventCB, this));
+            LOG_DEBUG("Restarting event callback after video mode change failed.");
+
+            return false;
+        }
+        else
+            LOGF_DEBUG("Set OPTION_BITDEPTH --> %d", index);
+
+        m_BitsPerPixel = (index == TC_VIDEO_MONO_8) ? 8 : 16;
+    }
+    // Color
+    else
+    {
+        // Check if raw format is supported.
+        if (index == TC_VIDEO_COLOR_RAW && m_RAWFormatSupport == false)
+        {
+            VideoFormatSP.s = IPS_ALERT;
+            IUResetSwitch(&VideoFormatSP);
+            VideoFormatS[TC_VIDEO_COLOR_RGB].s = ISS_ON;
+            LOG_ERROR("RAW format is not supported.");
+            IDSetSwitch(&VideoFormatSP, nullptr);
+            return false;
+        }
+
+        // We need to stop camera first
+        LOG_DEBUG("Stopping camera to change video mode.");
+        FP(Stop(m_CameraHandle));
+
+        int rc = FP(put_Option(m_CameraHandle, CP(OPTION_RAW), index));
+        if (FAILED(rc))
+        {
+            LOGF_ERROR("Failed to set video mode: %s", errorCodes[rc].c_str());
+            VideoFormatSP.s = IPS_ALERT;
+            IUResetSwitch(&VideoFormatSP);
+            VideoFormatS[TC_VIDEO_COLOR_RGB].s = ISS_ON;
+            IDSetSwitch(&VideoFormatSP, nullptr);
+
+            // Restart Capture
+            FP(StartPullModeWithCallback(m_CameraHandle, &ToupBase::eventCB, this));
+            LOG_DEBUG("Restarting event callback after changing video mode failed.");
+            return false;
+        }
+        else
+            LOGF_DEBUG("Set OPTION_RAW --> %d", index);
+
+        if (index == TC_VIDEO_COLOR_RGB)
+        {
+            m_Channels = 3;
+            m_BitsPerPixel = 8;
+            // Disable Bayer if supported.
+            if (m_RAWFormatSupport)
+                SetCCDCapability(GetCCDCapability() & ~CCD_HAS_BAYER);
+        }
+        else
+        {
+            SetCCDCapability(GetCCDCapability() | CCD_HAS_BAYER);
+            IUSaveText(&BayerT[2], getBayerString());
+            IDSetText(&BayerTP, nullptr);
+            m_BitsPerPixel = m_RawBitsPerPixel;
+        }
+    }
+
+    m_CurrentVideoFormat = index;
+    m_BitsPerPixel = (m_BitsPerPixel > 8) ? 16 : 8;
+
+    LOGF_DEBUG("Video Format: %d m_BitsPerPixel: %d", index, m_BitsPerPixel);
+
+    // Allocate memory
+    allocateFrameBuffer();
+
+    IUResetSwitch(&VideoFormatSP);
+    VideoFormatS[index].s = ISS_ON;
+    VideoFormatSP.s = IPS_OK;
+    IDSetSwitch(&VideoFormatSP, nullptr);
+
+    // Restart Capture
+    FP(StartPullModeWithCallback(m_CameraHandle, &ToupBase::eventCB, this));
+    LOG_DEBUG("Restarting event callback after video mode change.");
+    saveConfig(true, VideoFormatSP.name);
+
+    return true;
+}
+
+bool ToupBase::SetCaptureFormat(uint8_t index)
+{
+    return setVideoFormat(index);
 }

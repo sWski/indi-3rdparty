@@ -96,6 +96,8 @@ class ToupBase : public INDI::CCD
         virtual bool UpdateCCDFrame(int x, int y, int w, int h) override;
         virtual bool UpdateCCDBin(int binx, int biny) override;
 
+        virtual bool SetCaptureFormat(uint8_t index) override;
+
         // Guide Port
         virtual IPState GuideNorth(uint32_t ms) override;
         virtual IPState GuideSouth(uint32_t ms) override;
@@ -356,6 +358,7 @@ class ToupBase : public INDI::CCD
         // Video Format & Streaming
         //#############################################################################
         void getVideoImage();
+        bool setVideoFormat(uint8_t index);
 
         //#############################################################################
         // Guiding
@@ -415,6 +418,8 @@ class ToupBase : public INDI::CCD
         // Get the current Bayer string used
         const char *getBayerString();
 
+        bool updateBinningMode(int binx, int mode);
+
         //#############################################################################
         // Callbacks
         //#############################################################################
@@ -450,6 +455,15 @@ class ToupBase : public INDI::CCD
         //#############################################################################
         // Properties
         //#############################################################################
+        ISwitchVectorProperty BinningModeSP;
+        ISwitch BinningModeS[2];
+        typedef enum
+        {
+            TC_BINNING_AVG,
+            TC_BINNING_ADD,
+        } BINNING_MODE;
+
+
         ISwitchVectorProperty CoolerSP;
         ISwitch CoolerS[2];
         enum
@@ -633,6 +647,7 @@ class ToupBase : public INDI::CCD
             GAIN_HDR
         };
 
+        BINNING_MODE m_BinningMode = TC_BINNING_ADD;
         uint8_t m_CurrentVideoFormat = TC_VIDEO_COLOR_RGB;
         INDI_PIXEL_FORMAT m_CameraPixelFormat = INDI_RGB;
         eTriggerMode m_CurrentTriggerMode = TRIGGER_VIDEO;
@@ -670,4 +685,5 @@ class ToupBase : public INDI::CCD
                                 char *formats[], char *names[], int n);
 
         static const uint8_t MAX_RETRIES { 5 };
+        static const uint32_t MIN_DOWNLOAD_ESTIMATION { 1000 };
 };
