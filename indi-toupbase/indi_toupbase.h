@@ -60,6 +60,13 @@
 #define XP(x) Nncam##x
 #define THAND HNncam
 #define DNAME "Levenhuk"
+#elif BUILD_OMEGONPROCAM
+#include <omegonprocam.h>
+#define FP(x) Omegonprocam_##x
+#define CP(x) OMEGONPROCAM_##x
+#define XP(x) Omegonprocam##x
+#define THAND HOmegonprocam
+#define DNAME "OmegonProCam"
 #endif
 
 #define RAW_SUPPORTED   (CP(FLAG_RAW10) | CP(FLAG_RAW12) | CP(FLAG_RAW14) | CP(FLAG_RAW16))
@@ -105,7 +112,7 @@ class ToupBase : public INDI::CCD
         virtual IPState GuideWest(uint32_t ms) override;
 
         // ASI specific keywords
-        virtual void addFITSKeywords(fitsfile *fptr, INDI::CCDChip *targetChip) override;
+        virtual void addFITSKeywords(INDI::CCDChip *targetChip) override;
 
         // Save config
         virtual bool saveConfigItems(FILE *fp) override;

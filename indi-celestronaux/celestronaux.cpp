@@ -3,7 +3,7 @@
 
     Copyright (C) 2020 Paweł T. Jochym
     Copyright (C) 2020 Fabrizio Pollastri
-    Copyright (C) 2021 Jasem Mutlaq
+    Copyright (C) 2020-2022 Jasem Mutlaq
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Lesser General Public
@@ -19,6 +19,7 @@
     License along with this library; if not, write to the Free Software
     Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
+    JM 2022.07.07: Added Wedge support.
 */
 
 #include <algorithm>
@@ -289,6 +290,7 @@ bool CelestronAUX::initProperties()
     {
         // Force equatorial for such mounts
         configMountType = EQUATORIAL;
+        m_IsWedge = (strstr(getDeviceName(), "Wedge") != nullptr);
     }
 
     if (configMountType == EQUATORIAL)
@@ -971,7 +973,7 @@ double CelestronAUX::getNorthAz()
     if (!GetDatabaseReferencePosition(location))
         northAz = 0.;
     else
-        northAz = AltAzFromRaDec(get_local_sidereal_time(m_Location.longitude), 0., 0.).azimuth;
+        northAz = DegreesToAzimuth(AltAzFromRaDec(get_local_sidereal_time(m_Location.longitude), 0., 0.).azimuth);
     LOGF_DEBUG("North Azimuth = %lf", northAz);
     return northAz;
 }
@@ -1018,7 +1020,10 @@ bool CelestronAUX::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
 bool CelestronAUX::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
 {
     int rate = IUFindOnSwitchIndex(&SlewRateSP) + 1;
-    m_AxisDirection[AXIS_AZ] = (dir == DIRECTION_WEST) ? FORWARD : REVERSE;
+    if (isNorthHemisphere())
+        m_AxisDirection[AXIS_AZ] = (dir == DIRECTION_WEST) ? FORWARD : REVERSE;
+    else
+        m_AxisDirection[AXIS_AZ] = (dir == DIRECTION_WEST) ? REVERSE : FORWARD;
     m_AxisStatus[AXIS_AZ] = (command == MOTION_START) ? SLEWING : STOPPED;
     ScopeStatus      = SLEWING_MANUAL;
     TrackState       = SCOPE_SLEWING;
@@ -1269,7 +1274,7 @@ bool CelestronAUX::ReadScopeStatus()
 /////////////////////////////////////////////////////////////////////////////////////
 void CelestronAUX::EncodersToAltAz(INDI::IHorizontalCoordinates &coords)
 {
-    coords.azimuth = EncodersToDegrees(EncoderNP[AXIS_AZ].getValue());
+    coords.azimuth = DegreesToAzimuth(EncodersToDegrees(EncoderNP[AXIS_AZ].getValue()));
     coords.altitude = EncodersToDegrees(EncoderNP[AXIS_ALT].getValue());
     DEBUGF(INDI::AlignmentSubsystem::DBG_ALIGNMENT, "Axis1 encoder %10.f -> AZ %.4f°", EncoderNP[AXIS_AZ].getValue(),
            coords.azimuth);
@@ -1277,57 +1282,6 @@ void CelestronAUX::EncodersToAltAz(INDI::IHorizontalCoordinates &coords)
            coords.altitude);
 }
 
-/////////////////////////////////////////////////////////////////////////////////////
-///
-/////////////////////////////////////////////////////////////////////////////////////
-void CelestronAUX::EncodersToRADE(INDI::IEquatorialCoordinates &coords, TelescopePierSide &pierSide)
-{
-    auto haEncoder = (EncoderNP[AXIS_RA].getValue() / STEPS_PER_REVOLUTION) * 360.0;
-    auto deEncoder = 360.0 - (EncoderNP[AXIS_DE].getValue() / STEPS_PER_REVOLUTION) * 360.0;
-
-    double de = 0, ha = 0;
-    // Northern Hemisphere
-    if (LocationN[LOCATION_LATITUDE].value >= 0)
-    {
-        // "Normal" Pointing State (East, looking West)
-        if (deEncoder >= 0)
-        {
-            de = std::min(90 - deEncoder, 90.0);
-            ha = -6.0 + (haEncoder / 360.0) * 24.0 ;
-            pierSide = PIER_EAST;
-        }
-        // "Reversed" Pointing State (West, looking East)
-        else
-        {
-            de = 90 + deEncoder;
-            ha = 6.0 + (haEncoder / 360.0) * 24.0 ;
-            pierSide = PIER_WEST;
-        }
-    }
-    else
-    {
-        // East
-        if (deEncoder <= 0)
-        {
-            de = std::max(-90 - deEncoder, -90.0);
-            ha = -6.0 - (haEncoder / 360.0) * 24.0 ;
-            pierSide = PIER_WEST;
-        }
-        // West
-        else
-        {
-            de = -90 + deEncoder;
-            ha = 6.0 - (haEncoder / 360.0) * 24.0 ;
-            pierSide = PIER_EAST;
-        }
-    }
-
-    double lst = get_local_sidereal_time(LocationN[LOCATION_LONGITUDE].value);
-    double ra = range24(lst - ha);
-
-    coords.rightascension = ra;
-    coords.declination = de;
-}
 
 /////////////////////////////////////////////////////////////////////////////////////
 ///
@@ -1377,7 +1331,7 @@ bool CelestronAUX::Goto(double ra, double dec)
             INDI::IHorizontalCoordinates MountAltAz { 0, 0 };
             AltitudeAzimuthFromTelescopeDirectionVector(TDV, MountAltAz);
             // Converts to steps and we're done.
-            axis1Steps = DegreesToEncoders(MountAltAz.azimuth);
+            axis1Steps = DegreesToEncoders(AzimuthToDegrees(MountAltAz.azimuth));
             axis2Steps = DegreesToEncoders(MountAltAz.altitude);
 
             // For logging purposes
@@ -1423,7 +1377,7 @@ bool CelestronAUX::Goto(double ra, double dec)
             AltitudeAzimuthFromTelescopeDirectionVector(TDV, MountAltAz);
 
             // Converts to steps and we're done.
-            axis1Steps = DegreesToEncoders(MountAltAz.azimuth);
+            axis1Steps = DegreesToEncoders(AzimuthToDegrees(MountAltAz.azimuth));
             axis2Steps = DegreesToEncoders(MountAltAz.altitude);
         }
     }
@@ -1471,7 +1425,7 @@ bool CelestronAUX::Sync(double ra, double dec)
     if (MountTypeSP[MOUNT_ALTAZ].getState() == ISS_ON)
     {
         INDI::IHorizontalCoordinates MountAltAz { 0, 0 };
-        MountAltAz.azimuth = EncodersToDegrees(EncoderNP[AXIS_AZ].getValue());
+        MountAltAz.azimuth = DegreesToAzimuth(EncodersToDegrees(EncoderNP[AXIS_AZ].getValue()));
         MountAltAz.altitude = EncodersToDegrees(EncoderNP[AXIS_ALT].getValue());
         NewEntry.TelescopeDirection = TelescopeDirectionVectorFromAltitudeAzimuth(MountAltAz);
     }
@@ -1633,7 +1587,7 @@ void CelestronAUX::TimerHit()
 
                 // Next get current alt-az
                 INDI::IHorizontalCoordinates currentAltAz { 0, 0 };
-                currentAltAz.azimuth = EncodersToDegrees(EncoderNP[AXIS_AZ].getValue());
+                currentAltAz.azimuth = DegreesToAzimuth(EncodersToDegrees(EncoderNP[AXIS_AZ].getValue()));
                 currentAltAz.altitude = EncodersToDegrees(EncoderNP[AXIS_ALT].getValue());
 
                 // Offset in degrees
@@ -1654,7 +1608,7 @@ void CelestronAUX::TimerHit()
                 {
                     m_OffsetSwitchSettle[AXIS_AZ] = 0;
                     m_LastOffset[AXIS_AZ] = offsetSteps[AXIS_AZ];
-                    targetSteps[AXIS_AZ] = targetMountAxisCoordinates.azimuth * STEPS_PER_DEGREE;
+                    targetSteps[AXIS_AZ] = DegreesToEncoders(AzimuthToDegrees(targetMountAxisCoordinates.azimuth));
                     trackRates[AXIS_AZ] = m_Controllers[AXIS_AZ]->calculate(targetSteps[AXIS_AZ], EncoderNP[AXIS_AZ].getValue());
 
                     LOGF_DEBUG("Tracking AZ Now: %.f Target: %d Offset: %d Rate: %.2f", EncoderNP[AXIS_AZ].getValue(), targetSteps[AXIS_AZ],
@@ -1676,7 +1630,7 @@ void CelestronAUX::TimerHit()
                 {
                     m_OffsetSwitchSettle[AXIS_ALT] = 0;
                     m_LastOffset[AXIS_ALT] = offsetSteps[AXIS_ALT];
-                    targetSteps[AXIS_ALT]  = targetMountAxisCoordinates.altitude * STEPS_PER_DEGREE;
+                    targetSteps[AXIS_ALT]  = DegreesToEncoders(targetMountAxisCoordinates.altitude);
                     trackRates[AXIS_ALT] = m_Controllers[AXIS_ALT]->calculate(targetSteps[AXIS_ALT], EncoderNP[AXIS_ALT].getValue());
 
                     LOGF_DEBUG("Tracking AL Now: %.f Target: %d Offset: %d Rate: %.2f", EncoderNP[AXIS_ALT].getValue(), targetSteps[AXIS_ALT],
@@ -1739,12 +1693,7 @@ bool CelestronAUX::updateLocation(double latitude, double longitude, double elev
 /////////////////////////////////////////////////////////////////////////////////////
 double CelestronAUX::EncodersToDegrees(uint32_t steps)
 {
-    double value = steps * DEGREES_PER_STEP;
-    // North hemisphere
-    if (isNorthHemisphere())
-        return range360(value);
-    else
-        return range360(360 - value);
+    return range360(steps * DEGREES_PER_STEP);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
@@ -1752,12 +1701,29 @@ double CelestronAUX::EncodersToDegrees(uint32_t steps)
 /////////////////////////////////////////////////////////////////////////////////////
 uint32_t CelestronAUX::DegreesToEncoders(double degree)
 {
-    double target = range360(degree);
-    if (isNorthHemisphere() == false)
-        target = 360.0 - target;
-    //    if (target > 270.0)
-    //        target -= 360.0;
-    return round(target * STEPS_PER_DEGREE);
+    return round(range360(degree) * STEPS_PER_DEGREE);
+}
+
+/////////////////////////////////////////////////////////////////////////////////////
+///
+/////////////////////////////////////////////////////////////////////////////////////
+double CelestronAUX::DegreesToAzimuth(double degree)
+{
+    if (isNorthHemisphere())
+        return degree;
+    else
+        return range360(degree + 180);
+}
+
+/////////////////////////////////////////////////////////////////////////////////////
+///
+/////////////////////////////////////////////////////////////////////////////////////
+double CelestronAUX::AzimuthToDegrees(double degree)
+{
+    if (isNorthHemisphere())
+        return degree;
+    else
+        return range360(degree + 180);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
@@ -1782,6 +1748,88 @@ uint32_t CelestronAUX::HoursToEncoders(double hour)
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
+///
+/////////////////////////////////////////////////////////////////////////////////////
+void CelestronAUX::EncodersToRADE(INDI::IEquatorialCoordinates &coords, TelescopePierSide &pierSide)
+{
+    auto haEncoder = (EncoderNP[AXIS_RA].getValue() / STEPS_PER_REVOLUTION) * 360.0;
+    auto deEncoder = 360.0 - (EncoderNP[AXIS_DE].getValue() / STEPS_PER_REVOLUTION) * 360.0;
+
+    double de = 0, ha = 0;
+    // Northern Hemisphere
+    if (LocationN[LOCATION_LATITUDE].value >= 0)
+    {
+        if (m_IsWedge)
+        {
+            pierSide = PIER_UNKNOWN;
+            if (deEncoder >= 270)
+                de = 360 - deEncoder;
+            else if (deEncoder >= 90)
+                de = deEncoder - 180;
+            else
+                de = -deEncoder;
+
+            if (haEncoder >= 180)
+                ha = -((360 - haEncoder) / 360.0) * 24.0 ;
+            else
+                ha = (haEncoder / 360.0) * 24.0 ;
+        }
+        // "Normal" Pointing State (East, looking West)
+        else if (deEncoder >= 0)
+        {
+            de = std::min(90 - deEncoder, 90.0);
+            ha = -6.0 + (haEncoder / 360.0) * 24.0 ;
+            pierSide = PIER_EAST;
+        }
+        // "Reversed" Pointing State (West, looking East)
+        else
+        {
+            de = 90 + deEncoder;
+            ha = 6.0 + (haEncoder / 360.0) * 24.0 ;
+            pierSide = PIER_WEST;
+        }
+    }
+    else
+    {
+        if (m_IsWedge)
+        {
+            pierSide = PIER_UNKNOWN;
+            if (deEncoder >= 270)
+                de = deEncoder - 360;
+            else if (deEncoder >= 90)
+                de = 180 - deEncoder;
+            else
+                de = deEncoder;
+
+            if (haEncoder >= 180)
+                ha = -((360 - haEncoder) / 360.0) * 24.0 ;
+            else
+                ha = (haEncoder / 360.0) * 24.0 ;
+        }
+        // East
+        else if (deEncoder <= 0)
+        {
+            de = std::max(-90 - deEncoder, -90.0);
+            ha = -6.0 - (haEncoder / 360.0) * 24.0 ;
+            pierSide = PIER_WEST;
+        }
+        // West
+        else
+        {
+            de = -90 + deEncoder;
+            ha = 6.0 - (haEncoder / 360.0) * 24.0 ;
+            pierSide = PIER_EAST;
+        }
+    }
+
+    double lst = get_local_sidereal_time(LocationN[LOCATION_LONGITUDE].value);
+    double ra = range24(lst - ha);
+
+    coords.rightascension = ra;
+    coords.declination = de;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////
 /// HA encoders at 0 (HA = LST). When going WEST, steps increase from 0 to STEPS_PER_REVOLUTION {16777216}
 /// counter clock-wise.
 /// HA 0 to 6 hours range: 0 to 4194304
@@ -1789,15 +1837,27 @@ uint32_t CelestronAUX::HoursToEncoders(double hour)
 /////////////////////////////////////////////////////////////////////////////////////
 void CelestronAUX::RADEToEncoders(const INDI::IEquatorialCoordinates &coords, uint32_t &haEncoder, uint32_t &deEncoder)
 {
-
     double lst = get_local_sidereal_time(LocationN[LOCATION_LONGITUDE].value);
     double dHA = rangeHA(lst - coords.rightascension);
     double de = 0, ha = 0;
     // Northern Hemisphere
     if (LocationN[LOCATION_LATITUDE].value >= 0)
     {
+        if (m_IsWedge)
+        {
+            if (coords.declination < 0)
+                de = -coords.declination;
+            else
+                de = 360 - coords.declination;
+
+            if (dHA < 0)
+                ha = 360 - ((dHA / -24.0) * 360.0);
+            else
+                ha = (dHA / 24.0) * 360.0;
+
+        }
         // "Normal" Pointing State (East, looking West)
-        if (dHA <= 0)
+        else if (dHA <= 0)
         {
             de = -(coords.declination - 90.0);
             ha = (dHA + 6.0) * 360.0 / 24.0;
@@ -1811,8 +1871,21 @@ void CelestronAUX::RADEToEncoders(const INDI::IEquatorialCoordinates &coords, ui
     }
     else
     {
+        if (m_IsWedge)
+        {
+            if (coords.declination >= 0)
+                de = coords.declination;
+            else
+                de = 360 + coords.declination;
+
+            if (dHA < 0)
+                ha = 360 - ((dHA / -24.0) * 360.0);
+            else
+                ha = (dHA / 24.0) * 360.0;
+
+        }
         // "Normal" Pointing State (East, looking West)
-        if (dHA <= 0)
+        else if (dHA <= 0)
         {
             de = -(coords.declination + 90.0);
             ha = -(dHA + 6.0) * 360.0 / 24.0;
@@ -1836,7 +1909,9 @@ double CelestronAUX::EncodersToDE(uint32_t steps, TelescopePierSide pierSide)
 {
     double degrees = EncodersToDegrees(steps);
     double de = 0;
-    if ((isNorthHemisphere() && pierSide == PIER_WEST) || (!isNorthHemisphere() && pierSide == PIER_EAST))
+    if (m_IsWedge)
+        de = degrees;
+    else if ((isNorthHemisphere() && pierSide == PIER_WEST) || (!isNorthHemisphere() && pierSide == PIER_EAST))
         de = degrees - 270;
     else
         de = 90 - degrees;
@@ -1850,7 +1925,9 @@ double CelestronAUX::EncodersToDE(uint32_t steps, TelescopePierSide pierSide)
 double CelestronAUX::DEToEncoders(double de)
 {
     double degrees = 0;
-    if ((isNorthHemisphere() && m_TargetPierSide == PIER_WEST) || (!isNorthHemisphere() && m_TargetPierSide == PIER_EAST))
+    if (m_IsWedge)
+        degrees = de;
+    else if ((isNorthHemisphere() && m_TargetPierSide == PIER_WEST) || (!isNorthHemisphere() && m_TargetPierSide == PIER_EAST))
         degrees = 270 + de;
     else
         degrees = 90 - de;
