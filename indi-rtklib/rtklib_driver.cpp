@@ -133,27 +133,6 @@ bool RTKLIB::is_rtkrcv()
     return true;
 }
 
-bool RTKLIB::setSystemTime(time_t& raw_time)
-{
-    #ifdef __linux__
-        #if defined(__GNU_LIBRARY__)
-            #if (__GLIBC__ >= 2) && (__GLIBC_MINOR__ > 30)
-                timespec sTime = {};
-                sTime.tv_sec = raw_time;
-                clock_settime(CLOCK_REALTIME, &sTime);
-            #else
-                stime(&raw_time);
-            #endif
-        #else
-            stime(&raw_time);
-        #endif
-        return true;
-    #else
-        (void)raw_time;
-        return false;
-    #endif
-}
-
 void* RTKLIB::parse_rtkrcv_helper(void *obj)
 {
     static_cast<RTKLIB*>(obj)->parse_rtkrcv();
@@ -242,11 +221,11 @@ void RTKLIB::parse_rtkrcv()
             break;
             case status_fix:
             {
-                LocationN[LOCATION_LATITUDE].value  = enu[0];
-                LocationN[LOCATION_LONGITUDE].value = enu[1];
-                LocationN[LOCATION_ELEVATION].value = enu[2];
-                if (LocationN[LOCATION_LONGITUDE].value < 0)
-                    LocationN[LOCATION_LONGITUDE].value += 360;
+                LocationNP[LOCATION_LATITUDE].value  = enu[0];
+                LocationNP[LOCATION_LONGITUDE].value = enu[1];
+                LocationNP[LOCATION_ELEVATION].value = enu[2];
+                if (LocationNP[LOCATION_LONGITUDE].value < 0)
+                    LocationNP[LOCATION_LONGITUDE].value += 360;
 
                 struct timespec timesp;
                 time_t raw_time;
@@ -258,13 +237,13 @@ void RTKLIB::parse_rtkrcv()
                 raw_time = timesp.tv_sec;
                 utc = gmtime(&raw_time);
                 strftime(ts, 32, "%Y-%m-%dT%H:%M:%S", utc);
-                IUSaveText(&TimeT[0], ts);
+                TimeTP[0].setText(ts);
 
                 setSystemTime(raw_time);
 
                 local = localtime(&raw_time);
                 snprintf(ts, 32, "%4.2f", (local->tm_gmtoff / 3600.0));
-                IUSaveText(&TimeT[1], ts);
+                TimeTP[1].setText(ts);
 
                 pthread_mutex_lock(&lock);
                 locationPending = false;

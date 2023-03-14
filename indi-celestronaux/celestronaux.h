@@ -28,6 +28,7 @@
 #include <indiguiderinterface.h>
 #include <inditelescope.h>
 #include <indielapsedtimer.h>
+#include <inditimer.h>
 #include <connectionplugins/connectionserial.h>
 #include <connectionplugins/connectiontcp.h>
 #include <alignment/AlignmentSubsystemForDrivers.h>
@@ -77,6 +78,19 @@ class CelestronAUX :
         {
             FORWARD,
             REVERSE
+        };
+
+        enum MountVersion
+        {
+            GPS_Nexstar       = 0x0001,
+            SLT_Nexstar       = 0x0783,
+            SE_5_4            = 0x0b83,
+            SE_8_6            = 0x0c82,
+            CPC_Deluxe        = 0x1189,
+            Series_GT         = 0x1283,
+            AVX               = 0x1485,
+            Evolution_Nexstar = 0x1687,
+            CGX               = 0x1788
         };
 
         // Previous motion direction
@@ -131,6 +145,9 @@ class CelestronAUX :
         virtual bool ReadScopeStatus() override;
         virtual void TimerHit() override;
         virtual bool updateLocation(double latitude, double longitude, double elevation) override;
+
+        bool SetCurrentPark() override;
+        bool SetDefaultPark() override;
 
         /////////////////////////////////////////////////////////////////////////////////////
         /// Motion Control
@@ -209,10 +226,11 @@ class CelestronAUX :
         {
             return m_Location.latitude >= 0;
         }
+        bool startupWithoutHC();
+        bool getModel(AUXTargets target);
         bool getVersion(AUXTargets target);
         void getVersions();
         void hex_dump(char *buf, AUXBuffer data, size_t size);
-
 
         double AzimuthToDegrees(double degree);
         double DegreesToAzimuth(double degree);
@@ -240,6 +258,8 @@ class CelestronAUX :
         /// Guiding
         /////////////////////////////////////////////////////////////////////////////////////
         bool guidePulse(INDI_EQ_AXIS axis, uint32_t ms, int8_t rate);
+        bool getGuideRate(AUXTargets target);
+        bool setGuideRate(AUXTargets target, uint8_t rate);
 
 
     private:
@@ -268,6 +288,7 @@ class CelestronAUX :
         INDI::IHorizontalCoordinates m_MountCurrentAltAz {0, 0};
 
         INDI::ElapsedTimer m_TrackingElapsedTimer;
+        INDI::Timer m_GuideRATimer, m_GuideDETimer;
 
 
         /////////////////////////////////////////////////////////////////////////////////////
@@ -281,12 +302,14 @@ class CelestronAUX :
         bool readAUXResponse(AUXCommand c);
         bool processResponse(AUXCommand &cmd);
         int sendBuffer(AUXBuffer buf);
+        void formatModelString(char *s, int n, uint16_t model);
         void formatVersionString(char *s, int n, uint8_t *verBuf);
 
         // GPS Emulation
         bool m_GPSEmulation {false};
 
         // Firmware
+        uint16_t m_ModelVersion {0};
         uint8_t m_MainBoardVersion[4] {0};
         uint8_t m_AltitudeVersion[4] {0};
         uint8_t m_AzimuthVersion[4] {0};
@@ -329,15 +352,10 @@ class CelestronAUX :
         ///////////////////////////////////////////////////////////////////////////////
 
         // Firmware
-        INDI::PropertyText FirmwareTP {7};
-        enum {FW_HC, FW_MB, FW_AZM, FW_ALT, FW_WiFi, FW_BAT, FW_GPS};
+        INDI::PropertyText FirmwareTP {8};
+        enum {FW_MODEL, FW_HC, FW_MB, FW_AZM, FW_ALT, FW_WiFi, FW_BAT, FW_GPS};
         // Mount type
-        INDI::PropertySwitch MountTypeSP {2};
-        enum
-        {
-            MOUNT_EQUATORIAL,
-            MOUNT_ALTAZ
-        };
+        //INDI::PropertySwitch MountTypeSP {3};
 
         // Mount Cord wrap Toogle
         INDI::PropertySwitch CordWrapToggleSP {2};
@@ -370,7 +388,6 @@ class CelestronAUX :
         double m_TrackStartSteps[2] = {0, 0};
         double m_LastOffset[2] = {0, 0};
         uint8_t m_OffsetSwitchSettle[2] = {0, 0};
-        bool m_IsWedge {false};
 
         // PID controllers
         INDI::PropertyNumber Axis1PIDNP {3};
@@ -401,7 +418,9 @@ class CelestronAUX :
             HOME_AXIS2,
             HOME_ALL
         };
-        //INDI::PropertyNumber GainNP {2};
+
+        typedef enum { ALT_AZ, EQ_FORK, EQ_GEM } MountType;
+        MountType m_MountType {ALT_AZ};
         ///////////////////////////////////////////////////////////////////////////////
         /// Static Const Private Variables
         ///////////////////////////////////////////////////////////////////////////////
@@ -437,6 +456,8 @@ class CelestronAUX :
         static constexpr uint16_t AUX_SIDEREAL {0xffff};
         static constexpr uint16_t AUX_SOLAR {0xfffe};
         static constexpr uint16_t AUX_LUNAR {0xfffd};
+        // GEM Home Position
+        static constexpr uint32_t GEM_HOME {4194304};
 
 
 };

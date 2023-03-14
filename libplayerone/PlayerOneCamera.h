@@ -1,6 +1,6 @@
 ﻿/****************************************************************************
 **
-** Copyright (C) 2021 The Player One Astronomy Co., Ltd.
+** Copyright (C) 2023 The Player One Astronomy Co., Ltd.
 ** This software is the secondary software development kit (SDK) for
 ** the astronomy cameras made by Player One Astronomy Co., Ltd.
 ** Player One Astronomy Co., Ltd (hereinafter referred to as "the company") owns its copyright.
@@ -105,13 +105,13 @@ typedef enum _POAConfig                 ///< Camera Config Definition
     POA_AUTOEXPO_BRIGHTNESS,            ///< target brightness when auto-adjust, read-write, valueType == VAL_INT
     POA_GUIDE_NORTH,                    ///< ST4 guide north, generally,it's DEC+ on the mount, read-write, valueType == VAL_BOOL
     POA_GUIDE_SOUTH,                    ///< ST4 guide south, generally,it's DEC- on the mount, read-write, valueType == VAL_BOOL
-    POA_GUIDE_EAST,                     ///< ST4 guide east, generally,it's RA- on the mount, read-write, valueType == VAL_BOOL
-    POA_GUIDE_WEST,                     ///< ST4 guide west, generally,it's RA+ on the mount, read-write, valueType == VAL_BOOL
+    POA_GUIDE_EAST,                     ///< ST4 guide east, generally,it's RA+ on the mount, read-write, valueType == VAL_BOOL
+    POA_GUIDE_WEST,                     ///< ST4 guide west, generally,it's RA- on the mount, read-write, valueType == VAL_BOOL
     POA_EGAIN,                          ///< e/ADU, This value will change with gain, read-only, valueType == VAL_FLOAT
     POA_COOLER_POWER,                   ///< cooler power percentage[0-100%](only cool camera), read-only, valueType == VAL_INT
     POA_TARGET_TEMP,                    ///< camera target temperature(uint: C), read-write, valueType == VAL_INT
     POA_COOLER,                         ///< turn cooler(and fan) on or off, read-write, valueType == VAL_BOOL
-    POA_HEATER,                         ///< turn lens heater on or off, read-write, valueType == VAL_BOOL
+    POA_HEATER,                         ///< (deprecated)get state of lens heater(on or off), read-only, valueType == VAL_BOOL
     POA_HEATER_POWER,                   ///< lens heater power percentage[0-100%], read-write, valueType == VAL_INT
     POA_FAN_POWER,                      ///< radiator fan power percentage[0-100%], read-write, valueType == VAL_INT
     POA_FLIP_NONE,                      ///< no flip, Note: set this config(POASetConfig), the 'confValue' will be ignored, read-write, valueType == VAL_BOOL
@@ -129,11 +129,11 @@ typedef enum _POAConfig                 ///< Camera Config Definition
 typedef struct _POACameraProperties     ///< Camera Properties Definition
 {
     char cameraModelName[256];          ///< the camera name
-    char userCustomID[16];              ///< user custom name, it will be will be added after the camera name, max len 16 bytes,like:Mars-C[Juno], default is empty
+    char userCustomID[16];              ///< user custom name, it will be will be added after the camera name, max len 16 bytes,like:Mars-C [Juno], default is empty
     int cameraID;                       ///< it's unique,camera can be controlled and set by the cameraID
     int maxWidth;                       ///< max width of the camera
     int maxHeight;                      ///< max height of the camera
-    int bitDepth;                       ///< ADC depth of image sensor
+    int bitDepth;                       ///< ADC depth of CMOS sensor
     POABool isColorCamera;              ///< is a color camera or not
     POABool isHasST4Port;               ///< does the camera have ST4 port, if not, camera don't support ST4 guide
     POABool isHasCooler;                ///< does the camera have cooler, generally, the cool camera with cooler
@@ -557,7 +557,7 @@ POACAMERA_API  POAErrors POAStopExposure(int nCameraID);
  * @param pCameraState (output), pointer to a POACameraState value for saving camera state
  *
  * @return  POA_OK: operation successful
- *          POA_ERROR_POINTER: pImgFormat is NULL pointer
+ *          POA_ERROR_POINTER: pCameraState is NULL pointer
  *          POA_ERROR_INVALID_ID: no camera with this ID was found or the ID is out of boundary
  */
 POACAMERA_API  POAErrors POAGetCameraState(int nCameraID, POACameraState *pCameraState);
@@ -727,6 +727,23 @@ POACAMERA_API  POAErrors POASetUserCustomID(int nCameraID, const char* pCustomID
  */
 POACAMERA_API  POAErrors POAGetGainOffset(int nCameraID, int *pOffsetHighestDR, int *pOffsetUnityGain, int *pGainLowestRN, int *pOffsetLowestRN, int *pHCGain);
 
+/**
+ * @brief POAGetGainsAndOffsets: get some preset values of gain and offset
+ * @param nCameraID (input), get from in the POACameraProperties structure, use POAGetCameraProperties function
+ * @param pGainHighestDR (output), gain at highest dynamic range, in most cases, this gain is 0
+ * @param pHCGain (output), gain at HCG Mode(High Conversion Gain)
+ * @param pUnityGain (output), unity gain(or standard gain), with this gain, e/ADC will be 1
+ * @param pGainLowestRN (output), aka Maximum Analog Gain, gain at lowest read noise
+ * @param pOffsetHighestDR (output), offset at highest dynamic range
+ * @param pOffsetHCGain (output), offset at HCG Mode
+ * @param pOffsetUnityGain (output), offset at unity gain
+ * @param pOffsetLowestRN (output), offset at lowest read noise
+ * @return POA_OK: operation successful
+ *         POA_ERROR_INVALID_ID: no camera with this ID was found or the ID is out of boundary
+ */
+POACAMERA_API  POAErrors POAGetGainsAndOffsets(int nCameraID, int*pGainHighestDR, int *pHCGain, int *pUnityGain, int *pGainLowestRN,
+                                               int *pOffsetHighestDR, int *pOffsetHCGain, int *pOffsetUnityGain, int *pOffsetLowestRN);
+
 
 /**
  * @brief POAGetErrorString: convert POAErrors enum to char *, it is convenient to print or display errors
@@ -749,7 +766,7 @@ POACAMERA_API int POAGetAPIVersion();
 /**
  * @brief POAGetSDKVersion: get the sdk version
  *
- * @return  point to const char* version, eg: 1.0.11.17
+ * @return  point to const char* version, eg: 1.0.1
  */
 POACAMERA_API const char* POAGetSDKVersion();
 

@@ -48,7 +48,6 @@ class AAGCloudWatcher : public INDI::Weather
 
         virtual const char *getDefaultName() override;
         bool sendData();
-        float getRefreshPeriod();
         float getLastReadPeriod();
         bool heatingAlgorithm();
 
@@ -66,6 +65,7 @@ class AAGCloudWatcher : public INDI::Weather
         bool resetConstants();
         bool resetData();
         double getNumberValueFromVector(INumberVectorProperty *nvp, const char *name);
+        double getNumberValueFromVector(INDI::PropertyNumber nvp, const char *name);
         bool isWetRain();
 
         HeatingAlgorithmStatus heatingStatus;
@@ -88,6 +88,7 @@ class AAGCloudWatcher : public INDI::Weather
             RAW_SENSOR_RAIN_HEATER,
             RAW_SENSOR_RAIN_TEMPERATURE,
             RAW_SENSOR_LDR,
+            RAW_SENSOR_LDR_FREQ,
             RAW_SENSOR_READ_CYCLES,
             RAW_SENSOR_WIND_SPEED,
             RAW_SENSOR_RELATIVE_HUMIDITY,
@@ -95,7 +96,7 @@ class AAGCloudWatcher : public INDI::Weather
             RAW_SENSOR_TOTAL_READINGS
         };
 
-         enum
+        enum
         {
             SENSOR_INFRARED_SKY, //skyTemperature
             SENSOR_CORRECTED_INFRARED_SKY, //correctedTemperature

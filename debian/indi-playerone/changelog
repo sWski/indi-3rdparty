@@ -1,3 +1,43 @@
+indi-playerone (1.3) bionic; urgency=low
+
+  * Update PlayerOneCamera SDK to v3.2.1
+
+ -- Hiroshi SAITO <hiro3110g@gmail.com>  Thu, 2 Mar 2023 12:00:00 +0900
+
+indi-playerone (1.2) bionic; urgency=low
+
+  * Add single camera driver for multi threading
+  * Add flip property with bayer compensation
+  * Add nickname property for multi camera driver
+  * Update PlayerOneCamera SDK to v3.2.0
+
+ -- Hiroshi SAITO <hiro3110g@gmail.com>  Fri, 24 Feb 2023 12:00:00 +0900
+
+indi-playerone (1.1) bionic; urgency=low
+
+  * Update libplayerone with PlayerOnePW SDK v1.1.0
+
+ -- Hiroshi SAITO <hiro3110g@gmail.com>  Sun, 5 Feb 2023 12:00:00 +0900
+
+indi-playerone (1.0) bionic; urgency=low
+
+  * Add PlayerOne Filter Wheel driver
+  * Update libplayerone with PlayerOneCamera SDK v3.1.1
+
+ -- Hiroshi SAITO <hiro3110g@gmail.com>  Wed, 18 Jan 2023 12:00:00 +0900
+
+indi-playerone (0.9) bionic; urgency=low
+
+  * Update libplayerone with PlayerOneCamera SDK v3.1.0
+
+ -- Hiroshi SAITO <hiro3110g@gmail.com>  Thu, 15 Dec 2022 12:00:00 +0900
+
+indi-playerone (0.8) bionic; urgency=low
+
+  * Update libplayerone with PlayerOneCamera SDK v3.0.4
+
+ -- Hiroshi SAITO <hiro3110g@gmail.com>  Tue, 13 Sep 2022 12:00:00 +0900
+
 indi-playerone (0.7) bionic; urgency=low
 
   * Update libplayerone with PlayerOneCamera SDK v3.0.3

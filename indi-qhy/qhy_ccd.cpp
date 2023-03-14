@@ -320,7 +320,7 @@ bool QHYCCD::initProperties()
     IUFillTextVector(&GPSDataNowTP, GPSDataNowT, 4, getDeviceName(), "GPS_DATA_NOW", "Now", GPS_DATA_TAB, IP_RO, 60, IPS_IDLE);
 
     addAuxControls();
-    setDriverInterface(getDriverInterface() | FILTER_INTERFACE);
+    setDriverInterface(getDriverInterface());
 
     return true;
 }
@@ -945,43 +945,52 @@ bool QHYCCD::Connect()
 
         HasFilters = false;
         //Using new SDK query
-        ret = IsQHYCCDCFWPlugged(m_CameraHandle);
-        if (ret == QHYCCD_SUCCESS)
+        // N.B. JM 2022.09.18: Still must retry multiple times as sometimes the filter is not picked up
+        for (int i = 0; i < 3; i++)
         {
-            HasFilters = true;
-            m_MaxFilterCount = GetQHYCCDParam(m_CameraHandle, CONTROL_CFWSLOTSNUM);
-            LOGF_DEBUG("Filter Count (CONTROL_CFWSLOTSNUM): %d", m_MaxFilterCount);
-            // If we get invalid value, check again in 0.5 sec
-            if (m_MaxFilterCount > 16)
-            {
-                usleep(500000);
-                m_MaxFilterCount = GetQHYCCDParam(m_CameraHandle, CONTROL_CFWSLOTSNUM);
-                LOGF_DEBUG("Filter Count (CONTROL_CFWSLOTSNUM): %d", m_MaxFilterCount);
-            }
-
-            if (m_MaxFilterCount > 16)
-            {
-                LOG_DEBUG("Camera can support CFW but no filters are present.");
-                m_MaxFilterCount = -1;
-                HasFilters = false;
-            }
-
-            if (m_MaxFilterCount > 0)
+            ret = IsQHYCCDCFWPlugged(m_CameraHandle);
+            if (ret == QHYCCD_SUCCESS)
             {
                 HasFilters = true;
-                updateFilterProperties();
-                LOGF_INFO("Filter Count (CONTROL_CFWSLOTSNUM): %d", m_MaxFilterCount);
+                m_MaxFilterCount = GetQHYCCDParam(m_CameraHandle, CONTROL_CFWSLOTSNUM);
+                LOGF_DEBUG("Filter Count (CONTROL_CFWSLOTSNUM): %d", m_MaxFilterCount);
+                // If we get invalid value, check again in 0.5 sec
+                if (m_MaxFilterCount > 16)
+                {
+                    usleep(500000);
+                    m_MaxFilterCount = GetQHYCCDParam(m_CameraHandle, CONTROL_CFWSLOTSNUM);
+                    LOGF_DEBUG("Filter Count (CONTROL_CFWSLOTSNUM): %d", m_MaxFilterCount);
+                }
+
+                if (m_MaxFilterCount > 16)
+                {
+                    LOG_DEBUG("Camera can support CFW but no filters are present.");
+                    m_MaxFilterCount = -1;
+                    HasFilters = false;
+                }
+
+                if (m_MaxFilterCount > 0)
+                {
+                    HasFilters = true;
+                    updateFilterProperties();
+                    LOGF_INFO("Filter Count (CONTROL_CFWSLOTSNUM): %d", m_MaxFilterCount);
+                }
+                else
+                {
+                    HasFilters = false;
+                }
+
+                break;
             }
-            else
-            {
-                HasFilters = false;
-            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
 
         if (HasFilters == true)
+        {
             setDriverInterface(getDriverInterface() | FILTER_INTERFACE);
-        else
-            setDriverInterface(getDriverInterface() & ~FILTER_INTERFACE);
+            syncDriverInfo();
+        }
         LOGF_DEBUG("Has Filters: %s", HasFilters ? "True" : "False");
 
         ////////////////////////////////////////////////////////////////////
@@ -2584,10 +2593,15 @@ void QHYCCD::streamVideo()
         guard.unlock();
         if (ret == QHYCCD_SUCCESS)
         {
-            Streamer->newFrame(buffer, w * h * bpp / 8 * channels);
-
+            uint64_t timestamp = 0;
             if (HasGPS && GPSControlS[INDI_ENABLED].s == ISS_ON)
+            {
                 decodeGPSHeader();
+                timestamp = (uint64_t)GPSHeader.start_sec * 1e6;
+                timestamp += GPSHeader.start_us + QHY_SER_US_EPOCH;
+            }
+
+            Streamer->newFrame(buffer, w * h * bpp / 8 * channels, timestamp);
 
             //DEBUG
             //if(!frames)
@@ -2715,86 +2729,84 @@ bool QHYCCD::updateFilterProperties()
     return false;
 }
 
-void QHYCCD::addFITSKeywords(INDI::CCDChip *targetChip)
+void QHYCCD::addFITSKeywords(INDI::CCDChip *targetChip, std::vector<INDI::FITSRecord> &fitsKeywords)
 {
-    INDI::CCD::addFITSKeywords(targetChip);
-    int status = 0;
-    auto fptr = *targetChip->fitsFilePointer();
+    INDI::CCD::addFITSKeywords(targetChip, fitsKeywords);
 
     if (HasGain)
     {
-        fits_update_key_dbl(fptr, "Gain", GainN[0].value, 3, "Gain", &status);
+        fitsKeywords.push_back({"GAIN", GainN[0].value, 3, "Gain"});
     }
 
     if (HasOffset)
     {
-        fits_update_key_dbl(fptr, "Offset", OffsetN[0].value, 3, "Offset", &status);
+        fitsKeywords.push_back({"OFFSET", OffsetN[0].value, 3, "Offset"});
     }
 
     if (HasAmpGlow)
     {
-        fits_update_key_str(fptr, "Ampglow", IUFindOnSwitch(&AMPGlowSP)->label, "Mode", &status);
+        fitsKeywords.push_back({"AMPGLOW", IUFindOnSwitch(&AMPGlowSP)->label, "Mode"});
     }
 
     if (HasReadMode)
     {
-        fits_update_key_dbl(fptr, "ReadMode", ReadModeN[0].value, 1, "Read Mode", &status);
+        fitsKeywords.push_back({"READMODE", ReadModeN[0].value, 1, "Read Mode"});
     }
 
     if (HasGPS)
     {
         // #1 Start
         // ## Flag
-        fits_update_key_dbl(fptr, "GPS_SFlg", GPSHeader.start_flag, 0, "StartFlag", &status);
+        fitsKeywords.push_back({"GPS_SFLG", GPSHeader.start_flag, "StartFlag"});
         // ## Seconds
-        fits_update_key_lng(fptr, "GPS_SS", GPSHeader.start_sec, "StartShutterSeconds", &status);
+        fitsKeywords.push_back({"GPS_SS", GPSHeader.start_sec, "StartShutterSeconds"});
         // ## Microseconds
-        fits_update_key_dbl(fptr, "GPS_SU", GPSHeader.start_us, 3, "StartShutterMicroSeconds", &status);
+        fitsKeywords.push_back({"GPS_SU", GPSHeader.start_us, 3, "StartShutterMicroSeconds"});
         // ## Time
-        fits_update_key_str(fptr, "GPS_ST", GPSDataStartT[GPS_DATA_START_TS].text, "StartShutterTime", &status);
+        fitsKeywords.push_back({"GPS_ST", GPSDataStartT[GPS_DATA_START_TS].text, "StartShutterTime"});
 
         // #2 End
         // ## Flag
-        fits_update_key_dbl(fptr, "GPS_EFlg", GPSHeader.end_flag, 0, "EndFlag", &status);
+        fitsKeywords.push_back({"GPS_EFLG", GPSHeader.end_flag, "EndFlag"});
         // ## Seconds
-        fits_update_key_lng(fptr, "GPS_ES", GPSHeader.end_sec, "EndShutterSeconds", &status);
+        fitsKeywords.push_back({"GPS_ES", GPSHeader.end_sec, "EndShutterSeconds"});
         // ## Microseconds
-        fits_update_key_dbl(fptr, "GPS_EU", GPSHeader.end_us, 3, "EndShutterMicroSeconds", &status);
+        fitsKeywords.push_back({"GPS_EU", GPSHeader.end_us, 3, "EndShutterMicroSeconds"});
         // ## Time
-        fits_update_key_str(fptr, "GPS_ET", GPSDataStartT[GPS_DATA_END_TS].text, "EndShutterTime", &status);
+        fitsKeywords.push_back({"GPS_ET", GPSDataStartT[GPS_DATA_END_TS].text, "EndShutterTime"});
 
         // #3 Now
         // ## Flag
-        fits_update_key_dbl(fptr, "GPS_NFlg", GPSHeader.now_flag, 0, "NowFlag", &status);
+        fitsKeywords.push_back({"GPS_NFLG", GPSHeader.now_flag, "NowFlag"});
         // ## Seconds
-        fits_update_key_lng(fptr, "GPS_NS", GPSHeader.now_sec, "NowShutterSeconds", &status);
+        fitsKeywords.push_back({"GPS_NS", GPSHeader.now_sec, "NowShutterSeconds"});
         // ## Microseconds
-        fits_update_key_dbl(fptr, "GPS_NU", GPSHeader.now_us, 3, "NowShutterMicroSeconds", &status);
+        fitsKeywords.push_back({"GPS_NU", GPSHeader.now_us, 3, "NowShutterMicroSeconds"});
         // ## Time
-        fits_update_key_str(fptr, "GPS_NT", GPSDataStartT[GPS_DATA_NOW_TS].text, "NowShutterTime", &status);
+        fitsKeywords.push_back({"GPS_NT", GPSDataStartT[GPS_DATA_NOW_TS].text, "NowShutterTime"});
 
         // PPS Counter
-        fits_update_key_lng(fptr, "GPS_PPSC", GPSHeader.max_clock, "PPSCounter", &status);
+        fitsKeywords.push_back({"GPS_PPSC", GPSHeader.max_clock, "PPSCounter"});
 
         // GPS Status
 
         // System Clock Offset
-        //fits_update_key_dbl(fptr, "GPS_DSYS", GPSHeader.now_us, 6, "System Clock - GPS Clock Offset (s)", &status);
+        //fitsKeywords.push_back({"GPS_DSYS", GPSHeader.now_us, 6, "System Clock - GPS Clock Offset (s)"});
 
         // Time Offset Stable for
-        //fits_update_key_lng(fptr, "GPS_DSTB", GPSHeader.max_clock, "Time Offset Stable for (s)", &status);
+        //fitsKeywords.push_back({"GPS_DSTB", GPSHeader.max_clock, "Time Offset Stable for (s)"});
 
         // Longitude
-        fits_update_key_dbl(fptr, "GPS_LONG", GPSHeader.longitude, 3, "GPS Longitude", &status);
+        fitsKeywords.push_back({"GPS_LONG", GPSHeader.longitude, 7, "GPS Longitude"});
 
         // Latitude
-        fits_update_key_dbl(fptr, "GPS_LAT", GPSHeader.latitude, 3, "GPS Latitude", &status);
+        fitsKeywords.push_back({"GPS_LAT", GPSHeader.latitude, 7, "GPS Latitude"});
 
         // Sequence Number
-        fits_update_key_lng(fptr, "GPS_Seq", GPSHeader.seqNumber, "Sequence Number", &status);
+        fitsKeywords.push_back({"GPS_SEQ", GPSHeader.seqNumber, "Sequence Number"});
 
         // Temperorary Sequence Number
-        fits_update_key_lng(fptr, "GPS_Tmp", GPSHeader.tempNumber, "Temporary Sequence Number", &status);
+        fitsKeywords.push_back({"GPS_TMP", GPSHeader.tempNumber, "Temporary Sequence Number"});
     }
 
 }
@@ -2834,13 +2846,21 @@ void QHYCCD::decodeGPSHeader()
     IUSaveText(&GPSDataHeaderT[GPS_DATA_HEIGHT], data);
 
     // Latitude
-    GPSHeader.latitude = gpsarray[9] << 24 | gpsarray[10] << 16 | gpsarray[11] << 8 | gpsarray[12];
-    snprintf(data, 64, "%u", GPSHeader.latitude);
+    uint32_t latitude = gpsarray[9] << 24 | gpsarray[10] << 16 | gpsarray[11] << 8 | gpsarray[12];
+    // convert SDDMMMMMMM to DD.DDDDDDD
+    GPSHeader.latitude = (latitude % 1000000000) / 10000000;
+    GPSHeader.latitude += (latitude % 10000000) / 6000000.0;
+    GPSHeader.latitude *= latitude > 1000000000 ? -1.0 : 1.0;
+    snprintf(data, 64, "%f", GPSHeader.latitude);
     IUSaveText(&GPSDataHeaderT[GPS_DATA_LATITUDE], data);
 
     // Longitude
-    GPSHeader.longitude = gpsarray[13] << 24 | gpsarray[14] << 16 | gpsarray[15] << 8 | gpsarray[16];
-    snprintf(data, 64, "%u", GPSHeader.longitude);
+    uint32_t longitude = gpsarray[13] << 24 | gpsarray[14] << 16 | gpsarray[15] << 8 | gpsarray[16];
+    // convert SDDDMMMMMM to DDD.DDDDDDD
+    GPSHeader.longitude = (longitude % 1000000000) / 1000000;
+    GPSHeader.longitude += (longitude % 1000000) / 600000.0;
+    GPSHeader.longitude *= longitude > 1000000000 ? -1.0 : 1.0;
+    snprintf(data, 64, "%f", GPSHeader.longitude);
     IUSaveText(&GPSDataHeaderT[GPS_DATA_LONGITUDE], data);
 
     // Start Flag
