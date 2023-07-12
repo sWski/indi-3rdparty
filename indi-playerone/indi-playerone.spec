@@ -1,6 +1,6 @@
 %define __cmake_in_source_build %{_vpath_builddir}
 Name: indi-playerone
-Version:2.0.1.git
+Version:2.0.2.git
 Release: %(date -u +%%Y%%m%%d%%H%%M%%S)%{?dist}
 Summary: Instrument Neutral Distributed Interface 3rd party drivers
 
@@ -74,6 +74,14 @@ make DESTDIR=%{buildroot} install
 %{_datadir}/indi
 
 %changelog
+* Tue Jun 27 2023 Hiroshi Saito <hiro3110g@gmail.com>
+- Update PlayerOneCamera SDK to v3.4.0
+* Tue May 09 2023 Hiroshi Saito <hiro3110g@gmail.com>
+- Update PlayerOneCamera SDK to v3.3.0
+* Sat May 06 2023 Hiroshi Saito <hiro3110g@gmail.com>
+- Update PlayerOnePW SDK to v1.2.0
+* Thu Apr 27 2023 Hiroshi Saito <hiro3110g@gmail.com>
+- BugFix: top quarter noise on bin2 image
 * Wed Mar 15 2023 Hiroshi Saito <hiro3110g@gmail.com>
 - Update PlayerOneCamera SDK to v3.2.2
 * Thu Mar 2 2023 Hiroshi Saito <hiro3110g@gmail.com>

@@ -1468,28 +1468,27 @@ bool CelestronAUX::Sync(double ra, double dec)
            NewEntry.ObservationJulianDate, NewEntry.RightAscension, NewEntry.Declination, NewEntry.TelescopeDirection.x,
            NewEntry.TelescopeDirection.y, NewEntry.TelescopeDirection.z);
 
-    if (!CheckForDuplicateSyncPoint(NewEntry))
-    {
-        GetAlignmentDatabase().push_back(NewEntry);
+    if (CheckForDuplicateSyncPoint(NewEntry, 0.01))
+        RemoveSyncPoint(NewEntry, 0.01);
 
-        // Tell the client about size change
-        UpdateSize();
+    GetAlignmentDatabase().push_back(NewEntry);
 
-        // Tell the math plugin to reinitialise
-        Initialise(this);
+    // Tell the client about size change
+    UpdateSize();
 
-        // Force read before restarting
-        ReadScopeStatus();
+    // Tell the math plugin to reinitialise
+    Initialise(this);
 
-        // Sync cord wrap
-        syncCoordWrapPosition();
+    // Force read before restarting
+    ReadScopeStatus();
 
-        // The tracking seconds should be reset to restart the drift compensation
-        resetTracking();
+    // Sync cord wrap
+    syncCoordWrapPosition();
 
-        return true;
-    }
-    return false;
+    // The tracking seconds should be reset to restart the drift compensation
+    resetTracking();
+
+    return true;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1827,8 +1826,10 @@ void CelestronAUX::EncodersToRADE(INDI::IEquatorialCoordinates &coords, Telescop
 
         de = LocationN[LOCATION_LATITUDE].value >= 0 ? deEncoder : -deEncoder;
         ha = range24(haEncoder / 15.0);
+        pierSide = PIER_EAST;
         if (deEncoder < 90 || deEncoder > 270)
         {
+            pierSide = PIER_WEST;
             de = rangeDec(180 - de);
             ha = rangeHA(ha + 12);
         }
