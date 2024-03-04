@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.16)
 
 PROJECT(libindi-3rdparty CXX C)
 LIST(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules/")
@@ -220,12 +220,6 @@ if (CMAKE_SYSTEM_PROCESSOR MATCHES "armv+" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aa
 find_package(MMAL)
 endif()
 
-IF (MMAL_FOUND)
-option(WITH_RPICAM "Install Raspberry Pi High Quality Camera Driver" On)
-ELSE ()
-option(WITH_RPICAM "Install Raspberry Pi High Quality Camera Driver" Off)
-ENDIF(MMAL_FOUND)
-
 find_package(NUTClient)
 if (NUTCLIENT_FOUND)
     message(STATUS "Since nutclient was found, INDI NUT Driver can be built")
@@ -348,6 +342,7 @@ endif(WITH_AHP_GT)
 
 #toupbase dependencies
 if (WITH_TOUPBASE)
+add_subdirectory(libmeadecam)
 add_subdirectory(libtoupcam)
 add_subdirectory(libaltaircam)
 add_subdirectory(libbressercam)
@@ -736,11 +731,6 @@ add_subdirectory(libsvbony)
 SET(LIBRARIES_FOUND FALSE)
 endif(SVBONY_FOUND)
 endif(WITH_SVBONY)
-
-# rpi_cam
-if (WITH_RPICAM)
-add_subdirectory(indi-rpicam)
-endif(WITH_RPICAM)
 
 # Bresser Exos 2 GoTo
 if (WITH_BRESSEREXOS2)
