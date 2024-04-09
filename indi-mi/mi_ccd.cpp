@@ -162,7 +162,7 @@ bool MICCD::initProperties()
 
     IUFillSwitch(&CoolerS[0], "COOLER_ON", "ON", ISS_ON);
     IUFillSwitch(&CoolerS[1], "COOLER_OFF", "OFF", ISS_OFF);
-    IUFillSwitchVector(&CoolerSP, CoolerS, 2, getDeviceName(), "CCD_COOLER", "Cooler", MAIN_CONTROL_TAB, IP_WO,
+    IUFillSwitchVector(&CoolerSP, CoolerS, 2, getDeviceName(), "CCD_COOLER", "Cooler", MAIN_CONTROL_TAB, IP_RW,
                        ISR_1OFMANY, 0, IPS_IDLE);
 
     // CCD Regulation power

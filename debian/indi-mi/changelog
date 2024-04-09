@@ -1,3 +1,9 @@
+indi-mi (2.1) buster; urgency=low
+
+  * Fix disabled on/off cooler button in Ekos
+
+ -- Jakub Smutny <linux@gxccd.com>  Tue, 09 Apr 2024 07:00:00 +0100
+
 indi-mi (2.0) buster; urgency=medium
 
   * Add MI Standalone Filter Wheel driver
