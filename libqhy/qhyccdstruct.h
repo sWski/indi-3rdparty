@@ -9,6 +9,7 @@
 #ifndef __QHYCCDSTRUCTDEF_H__
 #define __QHYCCDSTRUCTDEF_H__
 
+#if __CPP_MODE__
 #if defined (_WIN32)
 #ifndef EXPORTFUNC
 #define EXPORTFUNC extern "C" __declspec(dllexport)
@@ -23,6 +24,23 @@
 #define EXPORTFUNC extern "C"
 #define STDCALL
 #define EXPORTC extern "C"
+#endif
+#else
+#if defined (_WIN32)
+#ifndef EXPORTFUNC
+#define EXPORTFUNC
+#endif
+#ifndef STDCALL
+#define STDCALL
+#endif
+#ifndef EXPORTC
+#define EXPORTC
+#endif
+#else
+#define EXPORTFUNC
+#define STDCALL
+#define EXPORTC
+#endif
 #endif
 
 #include "stdint.h"
@@ -46,6 +64,10 @@ typedef uint64_t QHYDWORD;
 
 #endif
 
+/**
+ * usb vendor request command
+ */
+#define QHYCCD_REQUEST_RQT  0x00
 
 /**
  * usb vendor request command
@@ -262,6 +284,7 @@ enum CONTROL_ID
 /*90*/  CONTROL_AUTOEXPSampleArea,   //!<auto exposure Sample Area
 /*91*/  CONTROL_AUTOEXPexpMaxMS,        //!<auto exposure max exp(ms)
 /*92*/  CONTROL_AUTOEXPgainMax,         //!<auto exposure max gain
+/*93*/	CONTROL_Error_Led,  // 992s 411s Error Led
 
 /* Do not Put Item after  CONTROL_MAX_ID !! This should be the max index of the list */
 /*Last One */  CONTROL_MAX_ID,
@@ -279,11 +302,13 @@ enum CONTROL_ID
 /*1033*/ CONTROL_DPC_value,             //!<value the image DPC function(Remove thermal noise)
 /*1034*/ CONTROL_HDR,                   //!<HDR For cameras with high gain and low gain channels combined into 16 bits, set combination parameters>
                     //!<HDR status  0:As-is output  1:Splice according to k and b values  2:Calculate k and b, only once
-/*1035*/ CONTROL_HDR_H_k,               //!<HDR H k
-/*1036*/ CONTROL_HDR_H_b,               //!<HDR H b
-/*1037*/ CONTROL_HDR_L_k,               //!<HDR L k
-/*1038*/ CONTROL_HDR_L_b,              //!<HDR L b
-/*1039*/ CONTROL_HDR_x                  //!<HDR X
+/*1035*/ //CONTROL_HDR_H_k,               //!<HDR H k
+/*1036*/ //CONTROL_HDR_H_b,               //!<HDR H b
+/*1035*/ CONTROL_HDR_L_k,               //!<HDR L k
+/*1036*/ CONTROL_HDR_L_b,              //!<HDR L b
+/*1037*/ CONTROL_HDR_x,//,                //!<HDR X
+/*1038*/ CONTROL_HDR_showKB            //!show HDR kb
+//CONTROL_SHOWIMG
 };   
 
 /**
