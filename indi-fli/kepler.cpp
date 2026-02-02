@@ -33,7 +33,7 @@
 template <typename E>
 constexpr auto to_underlying(E e) noexcept
 {
-    return static_cast<std::underlying_type_t<E>>(e);
+    return static_cast<std::underlying_type_t<E >> (e);
 }
 
 /********************************************************************************
@@ -44,7 +44,7 @@ static class Loader
         INDI::Timer hotPlugTimer;
         FPRODEVICEINFO camerasDeviceInfo[FLI_MAX_SUPPORTED_CAMERAS];
         // Serial / Camera Object
-        std::map<std::wstring, std::shared_ptr<Kepler>> cameras;
+        std::map<std::wstring, std::shared_ptr<Kepler >> cameras;
     public:
         Loader()
         {
@@ -96,7 +96,7 @@ static class Loader
                 std::map<std::wstring, bool> used;
             public:
                 UniqueName() = default;
-                explicit UniqueName(const std::map<std::wstring, std::shared_ptr<Kepler>> &usedCameras)
+                explicit UniqueName(const std::map<std::wstring, std::shared_ptr<Kepler >> &usedCameras)
                 {
 
                     for (const auto &camera : usedCameras)
@@ -239,8 +239,7 @@ Kepler::Kepler(const FPRODEVICEINFO &info, std::wstring name) : m_CameraInfo(inf
 {
     setVersion(FLI_CCD_VERSION_MAJOR, FLI_CCD_VERSION_MINOR);
 
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> convert;
-    auto byteName = convert.to_bytes(name);
+    std::string byteName(name.begin(), name.end());
     setDeviceName(byteName.c_str());
 
     memset(&fproUnpacked, 0, sizeof(fproUnpacked));
@@ -290,14 +289,14 @@ bool Kepler::initProperties()
                                IPS_IDLE);
 
     // Merge Planes
-    MergePlanesSP[to_underlying(
-                      FPRO_HWMERGEFRAMES::HWMERGE_FRAME_BOTH)].fill("to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_BOTH)", "Both", ISS_ON);
-    MergePlanesSP[to_underlying(
-                      FPRO_HWMERGEFRAMES::HWMERGE_FRAME_LOWONLY)].fill("to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_LOWONLY)", "Low Only",
-                              ISS_OFF);
+    MergePlanesSP[to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_BOTH)].fill("HWMERGE_FRAME_BOTH", "Both", ISS_ON);
+    MergePlanesSP[to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_LOWONLY)].fill("HWMERGE_FRAME_LOWONLY", "Low Only", ISS_OFF);
     MergePlanesSP[to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_HIGHONLY)].fill("HWMERGE_FRAME_HIGHONLYE", "High Only",
             ISS_OFF);
     MergePlanesSP.fill(getDeviceName(), "MERGE_PLANES", "Merging", IMAGE_SETTINGS_TAB, IP_RW, ISR_1OFMANY, 60, IPS_IDLE);
+
+    // Camera Mode is populated in setup()
+    CameraModeSP.fill(getDeviceName(), "CAMERA_MODE", "Camera Mode", IMAGE_SETTINGS_TAB, IP_RW, ISR_1OFMANY, 60, IPS_IDLE);
 
     // Calibration Frames (for MERGE_HARDWARE)
     MergeCalibrationFilesTP[CALIBRATION_DARK].fill("CALIBRATION_DARK", "Dark", "");
@@ -315,8 +314,13 @@ bool Kepler::initProperties()
     FanSP.fill(getDeviceName(), "FAN_CONTROL", "Fan", MAIN_CONTROL_TAB, IP_RW, ISR_1OFMANY, 60, IPS_IDLE);
 
     // Black Level
-    BlackLevelNP[0].fill("VALUE", "Value", "%.f", 0, 1000, 10, 0);
+    BlackLevelNP[0].fill("VALUE", "Value", "%.f", 0, 16383, 1000, 0);
     BlackLevelNP.fill(getDeviceName(), "BLACK_LEVEL", "Black Level", IMAGE_SETTINGS_TAB, IP_RW, 60, IPS_IDLE);
+
+    // Black Sun Adjust
+    BlackSunAdjustNP[0].fill("LDR", "LDR", "%.f", 0, 63, 1, 0);
+    BlackSunAdjustNP[1].fill("HDR", "HDR", "%.f", 0, 63, 1, 0);
+    BlackSunAdjustNP.fill(getDeviceName(), "BLACK_SUN_ADJUST", "Black Sun Adjust", IMAGE_SETTINGS_TAB, IP_RW, 60, IPS_IDLE);
 
     // GPS
     GPSStateLP[to_underlying(FPROGPSSTATE::FPRO_GPS_NOT_DETECTED)].fill("FPRO_GPS_NOT_DETECTED", "Not detected", IPS_IDLE);
@@ -398,10 +402,13 @@ bool Kepler::updateProperties()
         defineProperty(CoolerDutyNP);
         defineProperty(MergePlanesSP);
         defineProperty(MergeCalibrationFilesTP);
+        if (CameraModeSP.size() > 0)
+            defineProperty(CameraModeSP);
         defineProperty(LowGainSP);
         defineProperty(HighGainSP);
         defineProperty(FanSP);
         defineProperty(BlackLevelNP);
+        defineProperty(BlackSunAdjustNP);
         defineProperty(GPSStateLP);
         defineProperty(RequestStatSP);
     }
@@ -410,10 +417,13 @@ bool Kepler::updateProperties()
         deleteProperty(CoolerDutyNP);
         deleteProperty(MergePlanesSP);
         deleteProperty(MergeCalibrationFilesTP);
+        if (CameraModeSP.size() > 0)
+            deleteProperty(CameraModeSP);
         deleteProperty(LowGainSP);
         deleteProperty(HighGainSP);
         deleteProperty(FanSP);
         deleteProperty(BlackLevelNP);
+        deleteProperty(BlackSunAdjustNP);
         deleteProperty(GPSStateLP);
         deleteProperty(RequestStatSP);
     }
@@ -442,6 +452,39 @@ bool Kepler::ISNewNumber(const char *dev, const char *name, double values[], cha
             else
                 BlackLevelNP.setState(IPS_ALERT);
             BlackLevelNP.apply();
+            saveConfig(BlackLevelNP);
+            return true;
+        }
+
+        // Black Sun Adjust
+        if (BlackSunAdjustNP.isNameMatch(name))
+        {
+            bool LDR = true, HDR = true;
+
+            // Set LDR channel if provided
+            for (int i = 0; i < n; i++)
+            {
+                if (!strcmp(names[i], "LDR"))
+                {
+                    LDR = FPROSensor_SetBlackSunAdjust(m_CameraHandle, FPROBLACKADJUSTCHAN::FPRO_BLACK_ADJUST_CHAN_LDR,
+                                                       static_cast<uint32_t>(values[i])) >= 0;
+                }
+                else if (!strcmp(names[i], "HDR"))
+                {
+                    HDR = FPROSensor_SetBlackSunAdjust(m_CameraHandle, FPROBLACKADJUSTCHAN::FPRO_BLACK_ADJUST_CHAN_HDR,
+                                                       static_cast<uint32_t>(values[i])) >= 0;
+                }
+            }
+
+            if (LDR && HDR)
+            {
+                BlackSunAdjustNP.update(values, names, n);
+                BlackSunAdjustNP.setState(IPS_OK);
+            }
+            else
+                BlackSunAdjustNP.setState(IPS_ALERT);
+            BlackSunAdjustNP.apply();
+            saveConfig(BlackSunAdjustNP);
             return true;
         }
 
@@ -487,10 +530,8 @@ bool Kepler::ISNewNumber(const char *dev, const char *name, double values[], cha
         if (TemperatureSetNP.isNameMatch(name))
         {
             TemperatureSetNP.update(values, names, n);
-            double tvalues[1] = {TemperatureSetNP[0].value};
-            const char *tnames[1] = {TemperatureN[0].name};
-            ISNewNumber(getDeviceName(), "CCD_TEMPERATURE", tvalues, const_cast<char **>(tnames), 1);
-            TemperatureSetNP.setState(IPS_OK);
+            auto result = ISNewProperty(TemperatureNP, TemperatureNP[0].getName(), TemperatureSetNP[0].value);
+            TemperatureSetNP.setState(result ? IPS_OK : IPS_ALERT);
             TemperatureSetNP.apply();
             return true;
         }
@@ -508,6 +549,19 @@ bool Kepler::ISNewSwitch(const char *dev, const char *name, ISState *states, cha
 {
     if (dev != nullptr && !strcmp(dev, getDeviceName()))
     {
+        if (CameraModeSP.isNameMatch(name))
+        {
+            CameraModeSP.update(states, names, n);
+            int index = CameraModeSP.findOnSwitchIndex();
+            if (FPROSensor_SetMode(m_CameraHandle, m_SensorModes[index].uiModeIndex) >= 0)
+                CameraModeSP.setState(IPS_OK);
+            else
+                CameraModeSP.setState(IPS_ALERT);
+            CameraModeSP.apply();
+            saveConfig(CameraModeSP);
+            return true;
+        }
+
         // Merge Planes
         if (MergePlanesSP.isNameMatch(name))
         {
@@ -515,16 +569,12 @@ bool Kepler::ISNewSwitch(const char *dev, const char *name, ISState *states, cha
             MergePlanesSP.setState(IPS_OK);
 
             int index = MergePlanesSP.findOnSwitchIndex();
-            fproUnpacked.bLowImageRequest = index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_LOWONLY)
-                                            || index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_BOTH);
-            fproUnpacked.bHighImageRequest = index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_HIGHONLY)
-                                             || index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_BOTH);
+            fproUnpacked.bLowImageRequest = index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_LOWONLY);
+            fproUnpacked.bHighImageRequest = index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_HIGHONLY);
             fproUnpacked.bMergedImageRequest = index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_BOTH);
             fproUnpacked.bMetaDataRequest = true;
-            fproStats.bLowRequest = index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_LOWONLY)
-                                    || index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_BOTH);
-            fproStats.bHighRequest = index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_HIGHONLY)
-                                     || index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_BOTH);
+            fproStats.bLowRequest = index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_LOWONLY);
+            fproStats.bHighRequest = index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_HIGHONLY);
             fproStats.bMergedRequest = index == to_underlying(FPRO_HWMERGEFRAMES::HWMERGE_FRAME_BOTH);
 
             MergePlanesSP.apply();
@@ -543,7 +593,7 @@ bool Kepler::ISNewSwitch(const char *dev, const char *name, ISState *states, cha
             else
                 LowGainSP.setState(IPS_ALERT);
             LowGainSP.apply();
-            saveConfig(true, LowGainSP.getName());
+            saveConfig(LowGainSP);
             return true;
         }
 
@@ -558,7 +608,7 @@ bool Kepler::ISNewSwitch(const char *dev, const char *name, ISState *states, cha
             else
                 HighGainSP.setState(IPS_ALERT);
             HighGainSP.apply();
-            saveConfig(true, HighGainSP.getName());
+            saveConfig(HighGainSP);
             return true;
         }
 
@@ -581,7 +631,7 @@ bool Kepler::ISNewSwitch(const char *dev, const char *name, ISState *states, cha
                 LOG_INFO("Statistics are enabled. Merged images would take longer to download.");
             else
                 LOG_INFO("Statistics are disabled. Merged images would be faster to download.");
-            saveConfig(true, RequestStatSP.getName());
+            saveConfig(RequestStatSP);
             return true;
         }
 
@@ -626,12 +676,26 @@ bool Kepler::ISNewText(const char *dev, const char *name, char *texts[], char *n
         if (MergeCalibrationFilesTP.isNameMatch(name))
         {
             MergeCalibrationFilesTP.update(texts, names, n);
-            MergeCalibrationFilesTP.setState(IPS_OK);
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+            std::wstring_convert<std::codecvt_utf8_utf16<wchar_t >> converter;
+            std::wstring wdsnu = converter.from_bytes(MergeCalibrationFilesTP[CALIBRATION_DARK].getText());
+            std::wstring wprnu = converter.from_bytes(MergeCalibrationFilesTP[CALIBRATION_FLAT].getText());
+#pragma GCC diagnostic pop
+
+            if (FPROAlgo_SetHardwareMergeReferenceFiles(m_CameraHandle, wdsnu.c_str(), wprnu.c_str()) >= 0)
+            {
+                MergeCalibrationFilesTP.setState(IPS_OK);
+            }
+            else
+            {
+                MergeCalibrationFilesTP.setState(IPS_ALERT);
+            }
             MergeCalibrationFilesTP.apply();
             saveConfig(MergeCalibrationFilesTP);
             return true;
         }
-
     }
 
     return INDI::CCD::ISNewText(dev, name, texts, names, n);
@@ -659,13 +723,16 @@ bool Kepler::Connect()
         CommunicationMethodSP.setState(IPS_OK);
         CommunicationMethodSP.apply();
 
-        // Enable hardware level merging over PCIe.
-        mergeEnables.bMergeEnable = true;
-        mergeEnables.eMergeFrames = FPRO_HWMERGEFRAMES::HWMERGE_FRAME_BOTH;
-        // N.B. Need to check later which format is more suitable
-        //mergeEnables.eMergeFormat = FPRO_IMAGE_FORMAT::IFORMAT_RCD;
-        mergeEnables.eMergeFormat = FPRO_IMAGE_FORMAT::IFORMAT_FITS;
-        FPROAlgo_SetHardwareMergeEnables(m_CameraHandle, mergeEnables);
+        // Enable hardware level merging over PCIe if we have a fiber connection
+        if (isFiber)
+        {
+            mergeEnables.bMergeEnable = true;
+            mergeEnables.eMergeFrames = FPRO_HWMERGEFRAMES::HWMERGE_FRAME_BOTH;
+            // N.B. Need to check later which format is more suitable
+            //mergeEnables.eMergeFormat = FPRO_IMAGE_FORMAT::IFORMAT_RCD;
+            mergeEnables.eMergeFormat = FPRO_IMAGE_FORMAT::IFORMAT_FITS;
+            FPROAlgo_SetHardwareMergeEnables(m_CameraHandle, mergeEnables);
+        }
 
         LOGF_INFO("Established connection to camera via %s", isFiber ? "Fiber" : "USB");
 
@@ -761,6 +828,25 @@ bool Kepler::setup()
     fproStats.bMergedRequest = true;
     fproUnpacked.eMergeFormat = FPRO_IMAGE_FORMAT::IFORMAT_FITS;
 
+    // Camera Modes
+    uint32_t modeCount = 0, currentMode = 0;
+    if (FPROSensor_GetModeCount(m_CameraHandle, &modeCount, &currentMode) >= 0)
+    {
+        m_SensorModes.resize(modeCount);
+        CameraModeSP.resize(modeCount);
+        for (uint32_t i = 0; i < modeCount; i++)
+        {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+            FPROSensor_GetMode(m_CameraHandle, i, &m_SensorModes[i]);
+            std::wstring_convert<std::codecvt_utf8_utf16<wchar_t >> converter;
+            std::string modeName = converter.to_bytes(m_SensorModes[i].wcModeName);
+            CameraModeSP[i].fill(modeName.c_str(), modeName.c_str(), ISS_OFF);
+#pragma GCC diagnostic pop
+        }
+        CameraModeSP[currentMode].setState(ISS_ON);
+    }
+
     // Low Gain tables
     if (m_CameraCapabilitiesList[to_underlying(FPROCAPS::FPROCAP_LOW_GAIN_TABLE_SIZE)] > 0)
     {
@@ -827,6 +913,18 @@ bool Kepler::setup()
         BlackLevelNP[0].setValue(blackLevel);
         BlackLevelNP.setState(IPS_OK);
     }
+
+    // Black Sun Adjust
+    uint32_t blackSunAdjustLDR = 0, blackSunAdjustHDR = 0;
+    if (FPROSensor_GetBlackSunAdjust(m_CameraHandle, FPROBLACKADJUSTCHAN::FPRO_BLACK_ADJUST_CHAN_LDR, &blackSunAdjustLDR) >= 0)
+    {
+        BlackSunAdjustNP[0].setValue(blackSunAdjustLDR);
+    }
+    if (FPROSensor_GetBlackSunAdjust(m_CameraHandle, FPROBLACKADJUSTCHAN::FPRO_BLACK_ADJUST_CHAN_HDR, &blackSunAdjustHDR) >= 0)
+    {
+        BlackSunAdjustNP[1].setValue(blackSunAdjustHDR);
+    }
+    BlackSunAdjustNP.setState(IPS_OK);
 
 #ifdef LEGACY_MODE
     EncodeFormatSP.reset();
@@ -1102,6 +1200,8 @@ bool Kepler::saveConfigItems(FILE * fp)
         LowGainSP.save(fp);
     if (HighGainSP.size() > 0)
         HighGainSP.save(fp);
+    if (CameraModeSP.size() > 0)
+        CameraModeSP.save(fp);
 
     return true;
 }

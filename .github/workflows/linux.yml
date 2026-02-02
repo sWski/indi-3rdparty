@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        container: ["ubuntu", "debian", "fedora"]
+        container: ["ubuntu", "debian", "fedora", "archlinux"]
 
     container:
       image: ghcr.io/indilib/${{ matrix.container }}
@@ -19,6 +19,9 @@ jobs:
         uses: actions/checkout@v2
         with:
           path: indi-3rdparty
+
+      - name: Install Requisites
+        run: indi-3rdparty/scripts/requisites-install.sh
 
       - name: Get INDI Core Package
         uses: dawidd6/action-download-artifact@v6

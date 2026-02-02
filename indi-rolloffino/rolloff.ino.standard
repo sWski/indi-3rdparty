@@ -31,7 +31,7 @@
 // Can use the extra actions but does not predefine or request them. This sketch is compatible with using a 
 // gate opener controller and the Arduino.cc relay shield wihout needing any code edits. Default roof  
 // open/close directed to a relay shield or to a four channel relay module wired to those same 
-// pins. The example rolloff.ino.relay is similar but does request the driver send Actions and 
+// pins. The example rolloff.ino.relay-action is similar but does request the driver send Actions and 
 // includes a couple of Action examples using a relay shield plus a four channel relay module. 
 
 //////////////////////////////////////////////////////////

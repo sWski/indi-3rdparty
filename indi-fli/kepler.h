@@ -90,10 +90,16 @@ class Kepler : public INDI::CCD
         };
 
         // Black Level Adjust
-        INDI::PropertyNumber BlackLevelNP {1};
+        INDI::PropertyNumber BlackLevelNP {2};
+
+        // Black Sun Adjust
+        INDI::PropertyNumber BlackSunAdjustNP {2};
 
         // GPS State
         INDI::PropertyLight GPSStateLP {4};
+
+        // Camera Mode
+        INDI::PropertySwitch CameraModeSP {0};
 
 #ifdef LEGACY_MODE
         //****************************************************************************************
@@ -165,6 +171,9 @@ class Kepler : public INDI::CCD
         // Gain Tables
         FPROGAINVALUE *m_LowGainTable {nullptr};
         FPROGAINVALUE *m_HighGainTable {nullptr};
+
+        // Camera Modes
+        std::vector<FPROSENSMODE> m_SensorModes;
 
         static std::map<FPRODEVICETYPE, double> SensorPixelSize;
         static constexpr double TEMPERATURE_THRESHOLD {0.1};

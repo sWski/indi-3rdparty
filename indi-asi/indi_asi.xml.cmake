@@ -13,10 +13,12 @@
         </device>
 </devGroup>
 <devGroup group="Focusers">
-        <device label="ZWO EAF" manufacturer="ZWO">
+        <device label="ZWO EAF" mdpd="true" manufacturer="ZWO">
                 <driver name="ZWO EAF">indi_asi_focuser</driver>
                 <version>@ASI_VERSION_MAJOR@.@ASI_VERSION_MINOR@</version>
         </device>
+</devGroup>
+<devGroup group="Rotators">
         <device label="ZWO CAA" mdpd="true" manufacturer="ZWO">
                 <driver name="ZWO CAA">indi_asi_rotator</driver>
                 <version>@ASI_VERSION_MAJOR@.@ASI_VERSION_MINOR@</version>
