@@ -30,6 +30,7 @@
 #include "indipropertytext.h"
 #include "indisinglethreadpool.h"
 
+#include <limits>
 #include <vector>
 
 #include <indiccd.h>
@@ -40,6 +41,7 @@ class ASIBase : public INDI::CCD
 {
     public:
         ASIBase();
+        ASIBase(const ASI_CAMERA_INFO &camInfo, const std::string &serialNumber);
         ~ASIBase() override;
 
         virtual const char *getDefaultName() override;
@@ -59,6 +61,8 @@ class ASIBase : public INDI::CCD
 
         virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
         virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
+
+        virtual void nicknameSet(const char *nickname) override;
 
         // Streaming
         virtual bool StartStreaming() override;
@@ -94,8 +98,10 @@ class ASIBase : public INDI::CCD
         int grabImage(float duration);
 
     protected:
-        double mTargetTemperature;
-        double mCurrentTemperature;
+        double mTargetTemperature {std::numeric_limits<double>::quiet_NaN()};
+        double mCurrentTemperature {0};
+        bool mTemperatureReadFailed {false};
+        IPState mTemperatureStateBeforeFailure {IPS_IDLE};
         INDI::Timer mTimerTemperature;
         void temperatureTimerTimeout();
 
@@ -108,6 +114,9 @@ class ASIBase : public INDI::CCD
 
         /** Get initial parameters from camera */
         void setupParams();
+
+        /** Fill the format properties, needed before INDI::CCD defines CCD_CAPTURE_FORMAT */
+        void setupCaptureFormats();
 
         /** Create number and switch controls for camera by querying the API */
         void createControls(int piNumberOfControls);
@@ -136,6 +145,9 @@ class ASIBase : public INDI::CCD
         /** Reset USB device when camera gets stuck */
         void resetUSBDevice();
 
+        /** Send the current settings to the camera again after it was reopened */
+        void restoreCameraSettings();
+
         /** Additional Properties to INDI::CCD */
         INDI::PropertyNumber  CoolerNP {1};
         INDI::PropertySwitch  CoolerSP {2};
@@ -147,7 +159,6 @@ class ASIBase : public INDI::CCD
         INDI::PropertyNumber  ADCDepthNP   {1};
         INDI::PropertyText    SDKVersionSP {1};
         INDI::PropertyText    SerialNumberTP {1};
-        INDI::PropertyText    NicknameTP {1};
 
         INDI::PropertyNumber  BlinkNP {2};
         enum
@@ -165,9 +176,13 @@ class ASIBase : public INDI::CCD
 
         INDI::PropertySwitch USBResetSP {2};
 
-        std::string mCameraName, mCameraID, mSerialNumber, mNickname;
+        /** Unbinned frame as requested, before rounding to the ZWO ROI rules */
+        int mRequestedFrameX {0}, mRequestedFrameY {0}, mRequestedFrameW {0}, mRequestedFrameH {0};
+
+        std::string mCameraName, mCameraID, mSerialNumber;
         ASI_CAMERA_INFO mCameraInfo;
         uint8_t mExposureRetry {0};
+        bool mUSBResetDone {false};
         ASI_IMG_TYPE mCurrentVideoFormat;
         std::vector<ASI_CONTROL_CAPS> mControlCaps;
 };

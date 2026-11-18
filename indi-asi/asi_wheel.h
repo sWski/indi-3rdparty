@@ -26,14 +26,22 @@
 
 #include <EFW_filter.h>
 
+#include <indielapsedtimer.h>
 #include <indifilterwheel.h>
+#include <indipropertytext.h>
+
+#include <string>
 
 #define EFW_IS_MOVING -1
+#define EFW_MOVE_TIMEOUT_MS 60000
 
 class ASIWHEEL : public INDI::FilterWheel
 {
     public:
-        ASIWHEEL(const EFW_INFO &info, const char *name);
+        // serialNumber is the wheel's hardware serial (via Helpers::toHexString), used to
+        // resolve/persist a nickname independent of ASI SDK enumeration order. Pass an empty
+        // string if unavailable; the driver falls back to the supplied "name" unchanged.
+        ASIWHEEL(const EFW_INFO &info, const char *name, const std::string &serialNumber);
         ~ASIWHEEL();
 
         /**
@@ -43,6 +51,15 @@ class ASIWHEEL : public INDI::FilterWheel
         const EFW_INFO &getEFWInfo() const
         {
             return mEFWInfo;
+        }
+
+        /**
+         * @brief Returns the serial number of the filter wheel.
+         * @return The serial number as a string.
+         */
+        const std::string &getSerialNumber() const
+        {
+            return mSerialNumber;
         }
 
         virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
@@ -62,6 +79,9 @@ class ASIWHEEL : public INDI::FilterWheel
         // Save config
         virtual bool saveConfigItems(FILE *fp) override;
 
+        // Persist nickname changes made via the Control Panel, keyed by serial number.
+        virtual void nicknameSet(const char *nickname) override;
+
     private:
 
         // Unidirectional
@@ -74,7 +94,18 @@ class ASIWHEEL : public INDI::FilterWheel
         ISwitchVectorProperty CalibrateSP;
         ISwitch CalibrateS[1];
 
+        // Serial Number
+        INDI::PropertyText SerialNumberTP {1};
+
     private:
         int fw_id = -1;
         EFW_INFO mEFWInfo;
+
+        bool mQueryFailed {false};
+        // Report the position once the wheel has stopped, it may still be homing on connect
+        bool mSyncPosition {false};
+        INDI::ElapsedTimer mMoveTimer;
+
+        // EFW serial number, used to persist a nickname across enumeration-order changes
+        std::string mSerialNumber;
 };

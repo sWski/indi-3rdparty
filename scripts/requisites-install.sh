@@ -1,18 +1,10 @@
 #!/bin/bash
-
 set -e
-
 command -v realpath >/dev/null 2>&1 || realpath() {
     [[ $1 = /* ]] && echo "$1" || echo "$PWD/${1#./}"
 }
-
 SRCS=$(dirname $(realpath $0))/..
-
-# TODO
-# libtiff-devel ?
-
 OS=$(uname -s)
-
 case "$OS" in
     Darwin)
         BREW="/usr/local/bin/brew"
@@ -21,10 +13,12 @@ case "$OS" in
             BREW="/opt/homebrew/bin/brew"
         fi
         $BREW install --overwrite \
-            git \
+            git nlohmann-json \
             cfitsio libnova libusb curl \
             gsl jpeg fftw \
             ffmpeg libftdi libraw libdc1394 libgphoto2 opencv \
+            openssl libtiff \
+            qt \
             zmq
         ;;
     Linux)
@@ -36,10 +30,11 @@ case "$OS" in
                 $(command -v sudo) apt-get upgrade -y
                 $(command -v sudo) apt-get install -y \
                     git \
-                    cmake build-essential zlib1g-dev \
+                    cmake build-essential zlib1g-dev nlohmann-json3-dev python3 \
                     libcfitsio-dev libnova-dev libahp-gt-dev libahp-xc-dev libusb-1.0-0-dev libcurl4-gnutls-dev \
                     libgsl-dev libjpeg-dev libfftw3-dev libczmq-dev \
-                    \
+                    libssl-dev libtiff-dev \
+                    qt6-base-dev qt6-networkauth-dev \
                     libftdi1-dev libavcodec-dev libavdevice-dev libavformat-dev libswscale-dev \
                     libgps-dev libraw-dev libdc1394-dev libgphoto2-dev \
                     libboost-dev libboost-regex-dev liblimesuite-dev libopencv-dev libopencv-imgproc-dev \
@@ -50,13 +45,13 @@ case "$OS" in
                 $(command -v sudo) dnf upgrade -y
                 $(command -v sudo) dnf install -y \
                     git \
-                    cmake gcc-c++ zlib-devel \
-                    cfitsio-devel libnova-devel libahp-gt libahp-xc libusb1-devel libcurl-devel \
+                    cmake gcc-c++ zlib-devel json-devel python3 \
+                    cfitsio-devel libnova-devel libusb1-devel libcurl-devel \
                     gsl-devel libjpeg-devel fftw-devel opencv-devel zeromq-devel \
-                    \
+                    openssl-devel libtiff-devel \
+                    qt6-qtbase-devel qt6-qtnetworkauth-devel \
                     https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
                     https://download1.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
-
                 $(command -v sudo) dnf install -y \
                     ffmpeg-devel \
                     libftdi-devel \
@@ -68,10 +63,11 @@ case "$OS" in
                 $(command -v sudo) pacman -Syu --noconfirm
                 $(command -v sudo) pacman -S --noconfirm \
                     git \
-                    cmake base-devel \
+                    cmake base-devel nlohmann-json python \
                     cfitsio libnova libusb curl \
                     gsl libjpeg-turbo fftw rtl-sdr libev \
-                    qt5-base
+                    openssl libtiff \
+                    qt6-base qt6-networkauth
                 ;;
             opensuse-tumbleweed)
                 # broken git/openssh package
@@ -82,6 +78,8 @@ case "$OS" in
                     cmake gcc-c++ zlib-devel \
                     cfitsio-devel libnova-devel libusb-devel libcurl-devel \
                     gsl-devel libjpeg-devel fftw-devel libtheora-devel opencv-devel \
+                    openssl-devel libtiff-devel \
+                    qt6-base-devel qt6-networkauth-devel \
                     zeromq-devel libudev-devel
                 ;;
             *)
@@ -95,6 +93,5 @@ case "$OS" in
         echo "Unknown System: $OS"
         exit 1
 esac
-
 $SRCS/scripts/googletest-build.sh
 $SRCS/scripts/googletest-install.sh

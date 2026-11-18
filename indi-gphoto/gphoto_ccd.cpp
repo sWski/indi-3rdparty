@@ -31,6 +31,7 @@
 
 #include <sharedblob.h>
 #include <deque>
+#include <stdlib.h>
 #include <memory>
 #include <math.h>
 #include <unistd.h>
@@ -43,7 +44,22 @@
 #define FOCUS_TIMER  50
 #define MAX_RETRIES  3
 
-extern char * __progname;
+#ifdef __APPLE__
+// getprogname() is a BSD/Darwin function present in the runtime but hidden from
+// <stdlib.h> when _POSIX_C_SOURCE or _XOPEN_SOURCE are defined. Forward-declare it
+// explicitly to bypass the header visibility guard.
+extern "C" const char *getprogname(void);
+#endif
+
+static const char *getProgName()
+{
+#ifdef __APPLE__
+    return getprogname();
+#else
+    extern char * __progname;
+    return __progname;
+#endif
+}
 
 
 typedef struct
@@ -73,7 +89,7 @@ static class Loader
             : context(gp_context_new())
         {
             // Let's just create one camera for now
-            if (!strcmp(__progname, "indi_gphoto_ccd"))
+            if (!strcmp(getProgName(), "indi_gphoto_ccd"))
             {
                 cameras.push_back(std::unique_ptr<GPhotoCCD>(new GPhotoCCD()));
                 return;
@@ -123,7 +139,7 @@ static class Loader
 
                 // If we're NOT using the Generic INDI GPhoto drievr
                 // then let's search for multiple cameras
-                if (strcmp(__progname, "indi_gphoto_ccd"))
+                if (strcmp(getProgName(), "indi_gphoto_ccd"))
                 {
                     char prefix[MAXINDINAME];
                     char name[MAXINDINAME];
@@ -131,6 +147,10 @@ static class Loader
 
                     for (int j = 0; camInfos[j].exec != nullptr; j++)
                     {
+                        // Only match cameras that correspond to the running driver's brand
+                        if (strcmp(getProgName(), camInfos[j].exec))
+                            continue;
+
                         if (strstr(model, camInfos[j].model))
                         {
                             snprintf(prefix, sizeof(prefix), "%s", camInfos[j].driver);
@@ -857,6 +877,14 @@ bool GPhotoCCD::Connect()
                       "storage, please unmount it and disable auto-mount.");
             return false;
         }
+
+        // gphoto_open() starts from the library defaults (force BULB on, 60 seconds download timeout, save SD card image).
+        // Apply the current property values so they survive a disconnect/connect and match what the client sees.
+        gphoto_force_bulb(gphotodrv, ForceBULBSP[INDI_ENABLED].getState() == ISS_ON);
+        gphoto_set_download_timeout(gphotodrv, DownloadTimeoutNP[0].getValue());
+        const auto sdCardImageIndex = SDCardImageSP.findOnSwitchIndex();
+        if (sdCardImageIndex >= 0)
+            gphoto_handle_sdcard_image(gphotodrv, static_cast<CameraImageHandling>(sdCardImageIndex));
     }
 
     if (isSimulation())
@@ -993,6 +1021,9 @@ bool GPhotoCCD::Disconnect()
 {
     if (isSimulation())
         return true;
+    // Release the extended options while their widgets are still valid: gphoto_close() frees them,
+    // and updateProperties() would otherwise read the freed widgets in HideExtendedOptions().
+    HideExtendedOptions();
     gphoto_close(gphotodrv);
     gphotodrv        = nullptr;
     frameInitialized = false;
@@ -1056,6 +1087,11 @@ bool GPhotoCCD::StartExposure(float duration)
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 bool GPhotoCCD::AbortExposure()
 {
+    // Nothing is exposing: the read-out below would wait for an image that never comes,
+    // blocking the driver for the whole download timeout.
+    if (!InExposure)
+        return true;
+
     if (!isSimulation())
     {
         gphoto_abort_exposure(gphotodrv);
@@ -1337,6 +1373,52 @@ bool GPhotoCCD::grabImage()
             PrimaryCCD.setImageExtension("fits");
         else
             PrimaryCCD.setImageExtension("xisf");
+
+        // The raw decoder returns the full sensor buffer, which can be larger
+        // than the effective (visible) image: e.g. the Nikon D7200 decodes to
+        // 6016x4016 while its effective image is 6000x4000 (the extra rows and
+        // columns are masked/optical-black border pixels). gphoto2 reports the
+        // effective size via gp_camera_file_get_info, so crop the decoded buffer
+        // to that size before setting resolution/frame. This keeps the FITS
+        // dimensions and the CCD_FRAME/CCD_INFO limits consistent with Native
+        // transport mode.
+        if (!isSimulation())
+        {
+            int effectiveW = 0, effectiveH = 0;
+            gphoto_get_dimensions(gphotodrv, &effectiveW, &effectiveH);
+
+            if (effectiveW > 0 && effectiveH > 0 &&
+                    effectiveW <= w && effectiveH <= h &&
+                    (effectiveW != w || effectiveH != h))
+            {
+                const int srcLineBytes = w * bpp / 8;
+                const int dstLineBytes = effectiveW * bpp / 8;
+
+                if (naxis == 2)
+                {
+                    for (int row = 0; row < effectiveH; row++)
+                        memmove(memptr + row * dstLineBytes,
+                                memptr + row * srcLineBytes, dstLineBytes);
+                }
+                else if (naxis == 3)
+                {
+                    const int srcPlaneBytes = w * h * bpp / 8;
+                    const int dstPlaneBytes = effectiveW * effectiveH * bpp / 8;
+                    for (int plane = 0; plane < 3; plane++)
+                    {
+                        uint8_t *srcPlane = memptr + plane * srcPlaneBytes;
+                        uint8_t *dstPlane = memptr + plane * dstPlaneBytes;
+                        for (int row = 0; row < effectiveH; row++)
+                            memmove(dstPlane + row * dstLineBytes,
+                                    srcPlane + row * srcLineBytes, dstLineBytes);
+                    }
+                }
+
+                w = effectiveW;
+                h = effectiveH;
+                memsize = effectiveW * effectiveH * bpp / 8 * ((naxis == 3) ? 3 : 1);
+            }
+        }
 
         uint16_t subW = PrimaryCCD.getSubW();
         uint16_t subH = PrimaryCCD.getSubH();
@@ -1987,13 +2069,42 @@ void GPhotoCCD::streamLiveView()
         //            continue;
         //        }
 
+        // Fast path: well-behaved cameras (Canon, Nikon, etc.) always start with 0xFF 0xD8.
+        // Some cameras (e.g. Panasonic Lumix) prepend garbage bytes and/or an embedded
+        // thumbnail before the actual liveview JPEG, resulting in multiple SOI markers.
+        // Only scan when necessary: O(1) for normal cameras, O(n) only for malformed buffers.
+        uint8_t *cleanBuffer = inBuffer;
+        unsigned long cleanSize = previewSize;
+
+        if (previewSize < 2 || inBuffer[0] != 0xFF || inBuffer[1] != 0xD8)
+        {
+            // Scan for the last SOI marker: the actual liveview frame follows any
+            // prepended garbage bytes or an embedded thumbnail JPEG.
+            cleanBuffer = nullptr;
+            for (unsigned long i = 0; i + 1 < previewSize; ++i)
+            {
+                if (inBuffer[i] == 0xFF && inBuffer[i + 1] == 0xD8)
+                {
+                    cleanBuffer = &inBuffer[i];
+                    cleanSize   = previewSize - i;
+                }
+            }
+
+            if (cleanBuffer == nullptr)
+            {
+                LOG_DEBUG("No JPEG SOI marker found in preview frame, discarding.");
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+        }
+
         uint8_t * ccdBuffer      = PrimaryCCD.getFrameBuffer();
         size_t size             = 0;
         int w = 0, h = 0, naxis = 0;
 
         // Read jpeg from memory
         std::unique_lock<std::mutex> ccdguard(ccdBufferLock);
-        rc = read_jpeg_mem(inBuffer, previewSize, &ccdBuffer, &size, &naxis, &w, &h);
+        rc = read_jpeg_mem(cleanBuffer, cleanSize, &ccdBuffer, &size, &naxis, &w, &h);
 
         if (rc != 0)
         {

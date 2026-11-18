@@ -67,6 +67,9 @@ OCS::OCS() : INDI::Dome(), WI(this)
 
     setVersion(1, 5);
     SetDomeCapability(DOME_CAN_ABORT | DOME_HAS_SHUTTER);
+    // OCS reports and manages the park state itself from the controller status, including the
+    // roof/shutter, so it applies the shutter park policy in Park()/UnPark().
+    SetShutterParkPolicyHandledByDriver(true);
     SlowTimer.callOnTimeout(std::bind(&OCS::SlowTimerHit, this));
 }
 
@@ -2491,12 +2494,17 @@ int OCS::charToInt (char *inString)
  * *****************************************************/
 void OCS::blockUntilClear()
 {
-    // Blocking wait for last command response to clear
+    int maxWaitUs = ((OCSTimeoutSeconds * 1000000) + OCSTimeoutMicroSeconds);
+    int waited = 0;
     while (waitingForResponse) {
-        usleep(((OCSTimeoutSeconds * 1000000) + OCSTimeoutMicroSeconds) / 10);
-//        usleep(OCSTimeoutMicroSeconds / 10);
+        if (!isConnected() || waited > maxWaitUs * 10) {
+            waitingForResponse = false;
+            return;
+        }
+        int slice = maxWaitUs / 10;
+        usleep(slice);
+        waited += slice;
     }
-    // Grab the response waiting command blocker
     waitingForResponse = true;
 }
 

@@ -120,7 +120,7 @@ EQMod::EQMod(): GI(this)
     DBG_COMM         = INDI::Logger::getInstance().addDebugLevel("Serial Port", "COMM");
     DBG_MOUNT        = INDI::Logger::getInstance().addDebugLevel("Verbose Mount", "MOUNT");
 
-    mount = new Skywatcher(this);
+    mount = std::make_unique<Skywatcher>(this);
 
     SetTelescopeCapability(TELESCOPE_CAN_PARK | TELESCOPE_CAN_SYNC | TELESCOPE_CAN_GOTO | TELESCOPE_CAN_ABORT |
                            TELESCOPE_HAS_TIME | TELESCOPE_HAS_LOCATION
@@ -132,13 +132,13 @@ EQMod::EQMod(): GI(this)
     bzero(&syncdata2, sizeof(syncdata2));
 
 #ifdef WITH_ALIGN_GEEHALEL
-    align = new Align(this);
+    align = std::make_unique<Align>(this);
 #endif
 
-    simulator = new EQModSimulator(this);
+    simulator = std::make_unique<EQModSimulator>(this);
 
 #ifdef WITH_SCOPE_LIMITS
-    horizon = new HorizonLimits(this);
+    horizon = std::make_unique<HorizonLimits>(this);
 #endif
 
     /* initialize time */
@@ -157,13 +157,6 @@ EQMod::EQMod(): GI(this)
     // Others
     AutohomeState      = AUTO_HOME_IDLE;
     restartguidePPEC   = false;
-}
-
-EQMod::~EQMod()
-{
-    //dtor
-    delete mount;
-    mount = nullptr;
 }
 
 #if defined WITH_ALIGN || defined WITH_ALIGN_GEEHALEL
@@ -703,7 +696,6 @@ bool EQMod::Handshake()
                 && tcpConnection->connectionType() == Connection::TCP::TYPE_UDP)
         {
             tty_set_generic_udp_format(1);
-            tty_set_auto_reset_udp_session(1);
         }
 
         mount->setPortFD(PortFD);
@@ -870,7 +862,7 @@ bool EQMod::ReadScopeStatus()
             DEBUGF(INDI::AlignmentSubsystem::DBG_ALIGNMENT, " Direction RA(deg.)  %lf DEC %lf TDV(x %lf y %lf z %lf)",
                    RaDec.rightascension, RaDec.declination, TDV.x, TDV.y, TDV.z);
             aligned = true;
-            if (!TransformTelescopeToCelestial(TDV, alignedRA, alignedDEC))
+            if (!TransformTelescopeToCelestialJD(TDV, alignedRA, alignedDEC, juliandate))
             {
                 aligned = false;
                 DEBUGF(INDI::AlignmentSubsystem::DBG_ALIGNMENT,
@@ -946,7 +938,7 @@ bool EQMod::ReadScopeStatus()
         {
             char CurrentRAString[64] = {0}, CurrentDEString[64] = {0},
                                        AlignedRAString[64] = {0}, AlignedDEString[64] = {0},
-                                               AZString[64] = {0}, ALString[64] = {0};
+                                           AZString[64] = {0}, ALString[64] = {0};
             fs_sexa(CurrentRAString, currentRA, 2, 3600);
             fs_sexa(CurrentDEString, currentDEC, 2, 3600);
             fs_sexa(AlignedRAString, alignedRA, 2, 3600);
@@ -1863,7 +1855,7 @@ bool EQMod::Goto(double r, double d)
     {
         TelescopeDirectionVector TDV;
         aligned = true;
-        if (!TransformCelestialToTelescope(r, d, 0.0, TDV))
+        if (!TransformCelestialToTelescopeJD(r, d, ln_get_julian_from_sys(), TDV))
         {
             DEBUGF(INDI::AlignmentSubsystem::DBG_ALIGNMENT,
                    "Failed TransformCelestialToTelescope:  RA=%lf DE=%lf, Goto RA=%lf DE=%lf", r, d, gotoparams.ratarget,
@@ -2471,24 +2463,11 @@ bool EQMod::ISNewNumber(const char *dev, const char *name, double values[], char
 
         if (strcmp(name, "SLEWSPEEDS") == 0)
         {
-            /* TODO: don't change speed in gotos gotoparams.inprogress... */
-            if (TrackState != SCOPE_TRACKING)
-            {
-                try
-                {
-                    for (int i = 0; i < n; i++)
-                    {
-                        if (strcmp(names[i], "RASLEW") == 0)
-                            mount->SetRARate(values[i]);
-                        else if (strcmp(names[i], "DESLEW") == 0)
-                            mount->SetDERate(values[i]);
-                    }
-                }
-                catch (EQModError e)
-                {
-                    return (e.DefaultHandleException(this));
-                }
-            }
+            // Just store the requested custom slew speeds. The actual speeds are
+            // read from SlewSpeedsNP at slew time (GetRASlew/GetDESlew), so there
+            // is no need to command the motors here. Sending SetRARate/SetDERate
+            // would issue a "Set Motion Mode" command that starts the motors,
+            // which is dangerous when this handler runs during configuration load.
             SlewSpeedsNP.update(values, names, n);
             SlewSpeedsNP.setState(IPS_OK);
             SlewSpeedsNP.apply();
@@ -2506,7 +2485,7 @@ bool EQMod::ISNewNumber(const char *dev, const char *name, double values[], char
                 GuideNSNP.setState(IPS_IDLE);
                 GuideNSNP.apply();;
                 GuideWENP.setState(IPS_IDLE);
-                GuideWENP.apply();                
+                GuideWENP.apply();
                 LOG_WARN("Can not guide if not tracking.");
                 return true;
             }

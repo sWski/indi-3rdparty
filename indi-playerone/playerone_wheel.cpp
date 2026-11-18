@@ -33,6 +33,8 @@
 #include <unistd.h>
 #include <deque>
 #include <memory>
+#include <thread>
+#include <chrono>
 
 //#define SIMULATION
 #define WAIT_AFTER_OPEN_DEVICE
@@ -79,6 +81,13 @@ static class Loader
                     continue;
                 }
 
+                // Skip devices with invalid/error names reported by the SDK
+                if (strcasestr(info.Name, "error") != nullptr)
+                {
+                    IDLog("ERROR: PlayerOne EFW %d has invalid name '%s', skipping.", i + 1, info.Name);
+                    continue;
+                }
+
 #ifndef WAIT_AFTER_OPEN_DEVICE
                 PWState state;
                 result = POAGetPWState(id, &state);
@@ -91,7 +100,7 @@ static class Loader
                 // Wait for initial moving in case of just after plugged-in the device
                 while (state == PW_STATE_MOVING && elapsed_time < POA_EFW_TIMEOUT)
                 {
-                    usleep(interval * 1000);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(interval));
                     result = POAGetPWState(id, &state);
                     if (result != PW_OK)
                     {
@@ -120,6 +129,7 @@ static class Loader
                 }
                 else
                     name += " " + std::to_string(i);
+
                 wheels.push_back(std::unique_ptr<POAWHEEL>(new POAWHEEL(info, name.c_str())));
                 num_wheels_ok++;
             }
@@ -180,7 +190,7 @@ bool POAWHEEL::Connect()
         int elapsed_time = 0;
         while (state != PW_STATE_OPENED && elapsed_time < POA_EFW_TIMEOUT)
         {
-            usleep(interval * 1000);
+            std::this_thread::sleep_for(std::chrono::milliseconds(interval));
             result = POAGetPWState(fw_id, &state);
             if (result != PW_OK)
             {
@@ -233,9 +243,7 @@ bool POAWHEEL::Connect()
 bool POAWHEEL::Disconnect()
 {
     if (isSimulation())
-    {
         LOG_INFO("Simulation disconnected.");
-    }
     else if (fw_id >= 0)
     {
         PWErrors result = POAClosePW(fw_id);
@@ -323,9 +331,7 @@ bool POAWHEEL::ISNewSwitch(const char *dev, const char *name, ISState *states, c
             CalibrateS[0].s = ISS_OFF;
 
             if (isSimulation())
-            {
                 return true;
-            }
 
             CalibrateSP.s   = IPS_BUSY;
             IDSetSwitch(&CalibrateSP, nullptr);
@@ -404,7 +410,7 @@ bool POAWHEEL::SelectFilter(int f)
             int elapsed_time = 0;
             do
             {
-                usleep(interval * 1000);
+                std::this_thread::sleep_for(std::chrono::milliseconds(interval));
                 result = POAGetCurrentPosition(fw_id, &CurrentFilter);
                 elapsed_time += interval;
             }
@@ -441,13 +447,9 @@ void POAWHEEL::TimerHit()
     QueryFilter();
 
     if (CurrentFilter != TargetFilter)
-    {
         SetTimer(getCurrentPollingPeriod());
-    }
     else
-    {
         SelectFilterDone(CurrentFilter);
-    }
 }
 
 bool POAWHEEL::saveConfigItems(FILE *fp)

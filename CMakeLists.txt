@@ -22,6 +22,23 @@ if(APPLE)
   ## This one is needed for Craft
   include_directories("${CMAKE_INSTALL_PREFIX}/include")
 
+  ## INDI and most vendor SDKs use @rpath install names (e.g. @rpath/libindidriver.2.dylib).
+  ## CMake strips the build RPATH on install, leaving installed drivers with no LC_RPATH, so
+  ## keep the directories of linked libraries outside the build tree in the install RPATH.
+  ## Respect any value passed on the command line (e.g. by Craft).
+  if(NOT DEFINED CMAKE_INSTALL_RPATH_USE_LINK_PATH)
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
+  endif()
+  ## Vendor SDKs (ASI, QHY, Atik, ...) load @rpath/libusb-1.0.0.dylib, which CMake cannot see
+  ## since drivers link libusb by its absolute install name, so add the libusb directory too.
+  if(NOT DEFINED CMAKE_INSTALL_RPATH)
+    find_package(USB1 QUIET)
+    if(USB1_FOUND)
+      get_filename_component(_usb1_lib_dir "${USB1_LIBRARY}" DIRECTORY)
+      set(CMAKE_INSTALL_RPATH "${_usb1_lib_dir}")
+    endif()
+  endif()
+
   # FIX_LIBRARY_LINK Macro
   # This macro will check MacOS Binary Libraries provided by third parties for external links that could cause linking and packaging problems
   # If the FIX_MACOS_LIBS option is enabled when building, it will also attempt to fix the problems, which should then allow the build to continue.
@@ -200,8 +217,10 @@ option(FIX_MACOS_LIBS "Fix MacOS Libraries links" Off)
 
 # Define standard set of drivers to build (default linux target)
 option(WITH_EQMOD "Install EQMod Driver" On)
+option(WITH_ASTARBOX "Install AStarBox Driver" On)
 option(WITH_STARBOOK "Install Starbook Driver" On)
 option(WITH_STARBOOK_TEN "Install Starbook Ten Driver" On)
+option(WITH_TYR "Install Prometheus Astro Tyr telescope driver" On)
 option(WITH_CAUX "Install Celestron AUX Driver" On)
 option(WITH_SX "Install StarLight Xpress Driver" On)
 option(WITH_MAXDOME "Install MaxDomeII Driver" On)
@@ -232,6 +251,7 @@ option(WITH_RTKLIB "Install RTKLIB Driver" On)
 option(WITH_ARMADILLO "Install Armadillo & Platypus Driver" On)
 option(WITH_NIGHTSCAPE "Install Nightscape 8300 Driver" On)
 option(WITH_ATIK "Install Atik Driver" On)
+option(WITH_ATIK_EFW "Install Atik Electronic Filter Wheel Driver" On)
 option(WITH_TOUPCAM "Install Toupcam Driver" On)
 option(WITH_ALTAIRCAM "Install Altaircam Driver" On)
 option(WITH_BRESSERCAM "Install Bressercam Driver" On)
@@ -261,12 +281,15 @@ option(WITH_PLAYERONE "Install Player One Astronomy's Camera Driver" On)
 option(WITH_WEEWX_JSON "Install Weewx JSON Driver" On)
 option(WITH_ROLLOFFINO "Install RollOff ino Dome Driver" On)
 option(WITH_ASTROASIS "Install Astroasis Driver" On)
+option(WITH_SCOPELINK "Install ScopeLink Driver" On)
 option(WITH_OCS "Install OCS Driver" On)
 option(WITH_GPIO "Install GPIO Driver" On)
 option(WITH_TICFOCUSER-NG "Install TICFOCUSER-NG Driver" On)
 option(WITH_OPENOGMA "Install OpenOGMA Driver" On)
 option(WITH_LIBCAMERA "Install Libcamera Driver (Raspberry PI)" Off)
 option(WITH_BNO_IMU "Install BNO IMU Driver" Off)
+option(WITH_ICM_IMU "Install ICM IMU Driver" Off)
+# Due to Qt requirement
 option(WITH_CELESTRON_ORIGIN "Install Celestron Origin Driver" Off)
 
 # FFMPEG required for INDI Webcam driver
@@ -302,8 +325,22 @@ else(NUTCLIENT_FOUND)
   option(WITH_NUT "Install INDI NUT Driver" Off)
 endif(NUTCLIENT_FOUND)
 
+find_package(Mosquitto)
+if(MOSQUITTO_FOUND)
+  message(STATUS "Since libmosquitto was found, INDI Weather MQTT Driver can be built")
+  option(WITH_WEATHER_MQTT "Install INDI Weather MQTT Driver" On)
+else(MOSQUITTO_FOUND)
+  message(
+    STATUS
+    "Since libmosquitto was not found, INDI Weather MQTT Driver will not be built"
+  )
+  option(WITH_WEATHER_MQTT "Install INDI Weather MQTT Driver" Off)
+endif(MOSQUITTO_FOUND)
+
 # Add/remove cases for OSX
 if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+  # Celestron origin driver needs some work to make it work on MacOS due to Qt dependency
+  set (WITH_CELESTRON_ORIGIN Off)
   set(WITH_INOVAPLX Off)
   set(WITH_GIGE Off)
   set(WITH_PENTAX Off)
@@ -311,25 +348,12 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
   set(WITH_AHP_XC Off)
   set(WITH_AHP_GT Off)
   set(WITH_TICFOCUSER-NG Off)
+  set(WITH_ASTARBOX Off)
   # The drivers below are not yet compatible with Apple Silicon since their libraries are not universal binaries
   if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-    set(WITH_ASICAM Off)
     set(WITH_SBIG Off)
-    set(WITH_ATIK Off)
-    set(WITH_TOUPCAM Off)
-    set(WITH_ALTAIRCAM Off)
-    set(WITH_BRESSERCAM Off)
-    set(WITH_MALLINCAM Off)
-    set(WITH_MEADECAM Off)
-    set(WITH_NNCAM Off)
-    set(WITH_OGMACAM Off)
-    set(WITH_OMEGONPROCAM Off)
-    set(WITH_STARSHOOTG Off)
-    set(WITH_TSCAM Off)
     set(WITH_SVBONYCAM Off)
-    set(WITH_QHY Off)
-    set(WITH_SVBONY Off)
-    set(WITH_ASTROASIS Off)
+    set(WITH_ASTROASIS Off)    
   endif()
 endif()
 # Disable apogee, qhy and mi with gcc 4.8 and earlier versions
@@ -426,6 +450,18 @@ if(BUILD_LIBS)
     add_subdirectory(libsbig)
   endif(WITH_SBIG)
 
+  #libahp-xc
+  if(WITH_AHP_XC)
+    execute_process(COMMAND git clone https://github.com/ahp-electronics/libahp-xc ${CMAKE_CURRENT_BINARY_DIR}/libahp-xc)
+  add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/libahp-xc ${CMAKE_CURRENT_BINARY_DIR}/build-libahp-xc)
+  endif(WITH_AHP_XC)
+
+  #libahp-gt
+  if(WITH_AHP_GT)
+    execute_process(COMMAND git clone https://github.com/ahp-electronics/libahp-gt ${CMAKE_CURRENT_BINARY_DIR}/libahp-gt)
+  add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/libahp-gt ${CMAKE_CURRENT_BINARY_DIR}/build-libahp-gt)
+  endif(WITH_AHP_GT)
+
   #libpentax
   if(WITH_PENTAX)
     if(NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "^aarch64")
@@ -462,6 +498,10 @@ if(BUILD_LIBS)
 
   # This is the main 3rd Party build.  It runs if the Build Libs option is not selected.
 else(BUILD_LIBS)
+  ## Prometheus Astro Tyr
+  if(WITH_TYR)
+    add_subdirectory(indi-tyr)
+  endif(WITH_TYR)
   ## TicFocuser-ng
   if(WITH_TICFOCUSER-NG)
     add_subdirectory(indi-ticfocuser-ng)
@@ -476,6 +516,11 @@ else(BUILD_LIBS)
   if(WITH_SKYWALKER)
     add_subdirectory(indi-aok)
   endif(WITH_SKYWALKER)
+
+  ## AStarBox
+  if(WITH_ASTARBOX)
+    add_subdirectory(indi-astarbox)
+  endif(WITH_ASTARBOX)
 
   ## Starbook
   if(WITH_STARBOOK)
@@ -511,6 +556,11 @@ else(BUILD_LIBS)
   if(WITH_ROLLOFFINO)
     add_subdirectory(indi-rolloffino)
   endif(WITH_ROLLOFFINO)
+
+  ## ScopeLink
+  if(WITH_SCOPELINK)
+    add_subdirectory(indi-scopelink)
+  endif(WITH_SCOPELINK)
 
   ## Shelyak
   if(WITH_SHELYAK)
@@ -564,6 +614,11 @@ else(BUILD_LIBS)
       set(LIBRARIES_FOUND FALSE)
     endif(ATIK_FOUND)
   endif(WITH_ATIK)
+
+  ## ATIK EFW (serial)
+  if(WITH_ATIK_EFW)
+    add_subdirectory(indi-atik-efw)
+  endif(WITH_ATIK_EFW)
 
   set(ADD_TOUPBASE FALSE)
   ## TOUPBASE driver pack
@@ -733,6 +788,11 @@ else(BUILD_LIBS)
     add_subdirectory(indi-weewx-json)
   endif()
 
+  # Weather MQTT
+  if(WITH_WEATHER_MQTT)
+    add_subdirectory(indi-weather-mqtt)
+  endif()
+
   if(WITH_NIGHTSCAPE)
     add_subdirectory(indi-nightscape)
   endif(WITH_NIGHTSCAPE)
@@ -844,6 +904,11 @@ else(BUILD_LIBS)
   if (WITH_BNO_IMU)
     add_subdirectory(indi-bno-imu)
   endif(WITH_BNO_IMU)
+
+  # ICM_IMU
+  if (WITH_ICM_IMU)
+    add_subdirectory(indi-icm-imu)
+  endif(WITH_ICM_IMU)
 
   # CELESTRON ORIGIN
   if (WITH_CELESTRON_ORIGIN)

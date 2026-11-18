@@ -22,6 +22,7 @@ if(WIN32)
 
 elseif (APPLE)
 
+    # Universal (x86_64 + arm64) library from lib/all of the macOS SDK
     set_property (TARGET SVBCameraSDK PROPERTY IMPORTED_LOCATION "libSVBCameraSDK_mac64.bin")
 
     FIX_MACOS_LIBRARIES("libSVBCameraSDK" "libSVBCameraSDK_mac64.bin" "SVBONY")
@@ -40,7 +41,7 @@ elseif (UNIX)
 
     # Install udev rules
     if (INDI_INSTALL_UDEV_RULES)
-        set (UDEVRULES_INSTALL_DIR "/lib/udev/rules.d" CACHE STRING "Base directory for udev rules")
+        set (UDEVRULES_INSTALL_DIR "/usr/lib/udev/rules.d" CACHE STRING "Base directory for udev rules")
         install (FILES 90-svbonyusb.rules DESTINATION ${UDEVRULES_INSTALL_DIR})
     endif()
 

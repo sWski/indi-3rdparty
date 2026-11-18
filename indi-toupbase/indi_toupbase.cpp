@@ -156,6 +156,10 @@ bool ToupBase::initProperties()
     ///////////////////////////////////////////////////////////////////////////////////
     m_OffsetNP[0].fill("OFFSET", "Value", "%.f", 0, 255, 1, 0);
     m_OffsetNP.fill(getDeviceName(), "CCD_OFFSET", "Offset", CONTROL_TAB, IP_RW, 60, IPS_IDLE);
+    // Load the saved offset so it can be applied to the camera in setupParams(). The camera
+    // does not persist the black level (get_Option returns the default), so it must be
+    // restored from config and re-applied after any sensor-mode change that resets it.
+    m_OffsetNP.load();
 
     ///////////////////////////////////////////////////////////////////////////////////
     // R/G/B/Y Level Range
@@ -219,7 +223,7 @@ bool ToupBase::initProperties()
         /// Conversion Gain
         ///////////////////////////////////////////////////////////////////////////////////
         int nsp = 2;
-        m_ConversionGainSP[GAIN_LOW].fill("GAIN_LOW", "Low", ISS_OFF);
+        m_ConversionGainSP[GAIN_LOW].fill("GAIN_LOW", "Low", ISS_ON);
         m_ConversionGainSP[GAIN_HIGH].fill("GAIN_HIGH", "High", ISS_OFF);
         if (m_Instance->model->flag & CP(FLAG_CGHDR))
         {
@@ -238,6 +242,7 @@ bool ToupBase::initProperties()
     m_LowNoiseSP[INDI_ENABLED].fill("INDI_ENABLED", "ON", ISS_OFF);
     m_LowNoiseSP[INDI_DISABLED].fill("INDI_DISABLED", "OFF", ISS_ON);
     m_LowNoiseSP.fill(getDeviceName(), "TC_LOW_NOISE", "Low Noise Mode", CONTROL_TAB, IP_RW, ISR_1OFMANY, 60, IPS_IDLE);
+    m_LowNoiseSP.load();
 
     // Tail Light
     m_TailLightSP[INDI_ENABLED].fill("INDI_ENABLED", "ON", ISS_OFF);
@@ -246,12 +251,23 @@ bool ToupBase::initProperties()
     m_TailLightSP.load();
 
     ///////////////////////////////////////////////////////////////////////////////////
+    /// RealTime Frame Buffer Mode (video/streaming mode only)
+    /// Controls how the internal frame buffer deque behaves when new frames arrive.
+    ///////////////////////////////////////////////////////////////////////////////////
+    m_RealTimeSP[TC_REALTIME_OFF].fill("TC_REALTIME_OFF", "Off", ISS_ON);
+    m_RealTimeSP[TC_REALTIME_ON].fill("TC_REALTIME_ON", "Realtime", ISS_OFF);
+    m_RealTimeSP[TC_REALTIME_SOFT].fill("TC_REALTIME_SOFT", "Soft Realtime", ISS_OFF);
+    m_RealTimeSP.fill(getDeviceName(), "TC_REALTIME", "Frame Buffer Mode", CONTROL_TAB, IP_RW, ISR_1OFMANY, 60, IPS_IDLE);
+    m_RealTimeSP.load();
+
+    ///////////////////////////////////////////////////////////////////////////////////
     /// High Fullwell
     ///////////////////////////////////////////////////////////////////////////////////
     m_HighFullwellSP[INDI_ENABLED].fill("INDI_ENABLED", "ON", ISS_OFF);
     m_HighFullwellSP[INDI_DISABLED].fill("INDI_DISABLED", "OFF", ISS_ON);
     m_HighFullwellSP.fill(getDeviceName(), "TC_HIGHFULLWELL", "High Fullwell Mode", CONTROL_TAB, IP_RW, ISR_1OFMANY, 60,
                           IPS_IDLE);
+    m_HighFullwellSP.load();
 
     if (m_Instance->model->flag & CP(FLAG_FAN))
     {
@@ -362,6 +378,9 @@ bool ToupBase::updateProperties()
         if (m_SupportTailLight)
             defineProperty(m_TailLightSP);
 
+        // RealTime frame buffer mode (video/streaming only)
+        defineProperty(m_RealTimeSP);
+
         // Binning mode
         defineProperty(m_BinningModeSP);
         if (m_MonoCamera == false)
@@ -415,6 +434,7 @@ bool ToupBase::updateProperties()
         if (m_SupportTailLight)
             deleteProperty(m_TailLightSP);
 
+        deleteProperty(m_RealTimeSP);
         deleteProperty(m_BinningModeSP);
         if (m_MonoCamera == false)
         {
@@ -599,6 +619,8 @@ void ToupBase::setupParams()
         CaptureFormat rgb = {"INDI_RGB", "RGB", 8, false };
         CaptureFormat raw = {"INDI_RAW", (m_maxBitDepth > 8) ? "RAW 16" : "RAW 8", static_cast<uint8_t>((m_maxBitDepth > 8) ? 16 : 8), true };
 
+        // setupParams() enables RAW mode in the SDK, so keep the driver's format bookkeeping aligned.
+        m_CurrentVideoFormat = 1;
         m_Channels = 1;
         BayerTP[2].setText(getBayerString());// Get RAW Format
 
@@ -659,69 +681,49 @@ void ToupBase::setupParams()
         LOGF_ERROR("Failed to set software trigger mode. %s", errorCodes(rc).c_str());
     }
 
-    // Set tail light status
-    int currentTailLightValue, configuredTailLightValue = 0;
-
+    // Apply the saved/configured tail light status to the camera.
+    // The switch is populated from config via m_TailLightSP.load() in initProperties(),
+    // so push that value to the hardware here. Reading the camera's power-on default and
+    // syncing the switch to it (as was done previously) discards the user's saved setting,
+    // because a later loadConfig sees no change (the switch already holds the saved value)
+    // and therefore never writes it to the camera.
     if (m_SupportTailLight)
     {
-        rc = FP(get_Option(m_Handle, CP(OPTION_TAILLIGHT), &currentTailLightValue));
+        int targetTailLight = (m_TailLightSP[INDI_ENABLED].getState() == ISS_ON) ? 1 : 0;
+        rc = FP(put_Option(m_Handle, CP(OPTION_TAILLIGHT), targetTailLight));
         if (FAILED(rc))
-        {
-            LOGF_ERROR("Failed to get camera tail light status. %s", errorCodes(rc).c_str());
-        }
-        configuredTailLightValue = m_TailLightSP.findOnSwitchIndex();
-        if (currentTailLightValue != configuredTailLightValue)
-        {
-            rc = FP(put_Option(m_Handle, CP(OPTION_TAILLIGHT), configuredTailLightValue));
-            if (FAILED(rc))
-            {
-                m_TailLightSP.setState(IPS_ALERT);
-                LOGF_ERROR("Failed to set camera tail light status. %s", errorCodes(rc).c_str());
-                m_TailLightSP.apply();
-            }
-        }
+            LOGF_ERROR("Failed to set camera tail light status. %s", errorCodes(rc).c_str());
     }
 
-    // Set tail light status
-    if (m_SupportTailLight)
+    // Apply the saved/configured conversion gain to the camera.
+    // Loaded from config via m_ConversionGainSP.load() in initProperties(); push it to the
+    // hardware so darks/bias and lights are all taken at the configured conversion gain,
+    // regardless of whether/when the client issues a subsequent loadConfig.
+    if (m_Instance->model->flag & (CP(FLAG_CG) | CP(FLAG_CGHDR)))
     {
-        int currentTailLightValue, configuredTailLightValue = 0;
-        rc = FP(get_Option(m_Handle, CP(OPTION_TAILLIGHT), &currentTailLightValue));
+        int targetConversionGain = m_ConversionGainSP.findOnSwitchIndex();
+        if (targetConversionGain < 0)
+            targetConversionGain = GAIN_LOW;
+        rc = FP(put_Option(m_Handle, CP(OPTION_CG), targetConversionGain));
         if (FAILED(rc))
-        {
-            LOGF_ERROR("Failed to get camera tail light status. %s", errorCodes(rc).c_str());
-        }
-        configuredTailLightValue = m_TailLightSP.findOnSwitchIndex();
-        if (currentTailLightValue != configuredTailLightValue)
-        {
-            rc = FP(put_Option(m_Handle, CP(OPTION_TAILLIGHT), configuredTailLightValue));
-            if (FAILED(rc))
-            {
-                m_TailLightSP.setState(IPS_ALERT);
-                LOGF_ERROR("Failed to set camera tail light status. %s", errorCodes(rc).c_str());
-                m_TailLightSP.apply();
-            }
-        }
-    }
-
-    // Get CCD Controls values
-    int currentConversionGain, configuredConversionGain = 0;
-
-    rc = FP(get_Option(m_Handle, CP(OPTION_CG), &currentConversionGain));
-    if (FAILED(rc))
-    {
-        LOGF_ERROR("Failed to get camera gain conversion setting. %s", errorCodes(rc).c_str());
-    }
-    configuredConversionGain = m_ConversionGainSP.findOnSwitchIndex();
-    if (currentConversionGain != configuredConversionGain)
-    {
-        rc = FP(put_Option(m_Handle, CP(OPTION_CG), configuredConversionGain));
-        if (FAILED(rc))
-        {
-            m_ConversionGainSP.setState(IPS_ALERT);
             LOGF_ERROR("Failed to set camera gain conversion setting. %s", errorCodes(rc).c_str());
-            m_ConversionGainSP.apply();
-        }
+    }
+
+    // Apply the saved low-noise and high-fullwell modes to the camera. These are sensor-mode
+    // options that (like conversion gain) reset the black level when changed, so they must be
+    // applied here BEFORE the offset is written below, which is why the offset is applied last.
+    if (m_Instance->model->flag & CP(FLAG_LOW_NOISE))
+    {
+        rc = FP(put_Option(m_Handle, CP(OPTION_LOW_NOISE), m_LowNoiseSP[INDI_ENABLED].getState()));
+        if (FAILED(rc))
+            LOGF_ERROR("Failed to set low noise mode. %s", errorCodes(rc).c_str());
+    }
+
+    if (m_Instance->model->flag & CP(FLAG_HIGH_FULLWELL))
+    {
+        rc = FP(put_Option(m_Handle, CP(OPTION_HIGH_FULLWELL), m_HighFullwellSP[INDI_ENABLED].getState()));
+        if (FAILED(rc))
+            LOGF_ERROR("Failed to set high fullwell mode. %s", errorCodes(rc).c_str());
     }
 
     uint16_t nMax = 0, nDef = 0;
@@ -838,6 +840,16 @@ void ToupBase::setupParams()
     // Set range of black level based on max bit depth RAW
     int bLevelStep = 1 << (m_maxBitDepth - 8);
     m_OffsetNP[0].setMax(CP(BLACKLEVEL8_MAX) * bLevelStep);
+    m_OffsetNP.updateMinMax();
+
+    // Apply the saved offset (black level) to the camera LAST, after conversion gain,
+    // low noise, high fullwell, resolution and bit depth. Those sensor-mode changes reset
+    // the camera's black level, so applying the offset last ensures the configured value
+    // actually takes effect (see issue #1238: offset shown correctly in FITS but the sensor
+    // was left at its default, clipping darks/bias).
+    rc = FP(put_Option(m_Handle, CP(OPTION_BLACKLEVEL), static_cast<int>(m_OffsetNP[0].getValue())));
+    if (FAILED(rc))
+        LOGF_ERROR("Failed to set offset (black level). %s", errorCodes(rc).c_str());
 
     // Allocate memory
     allocateFrameBuffer();
@@ -850,19 +862,24 @@ void ToupBase::setupParams()
 
 void ToupBase::allocateFrameBuffer()
 {
+    uint32_t binX = PrimaryCCD.getBinX();
+    uint32_t binY = PrimaryCCD.getBinY();
+    uint32_t width = PrimaryCCD.getSubW() / binX;
+    uint32_t height = PrimaryCCD.getSubH() / binY;
+
     // Allocate memory
     if (m_MonoCamera)
     {
         if (0 == m_CurrentVideoFormat)
         {
-            PrimaryCCD.setFrameBufferSize(PrimaryCCD.getXRes() * PrimaryCCD.getYRes());
+            PrimaryCCD.setFrameBufferSize(width * height);
             PrimaryCCD.setBPP(8);
             PrimaryCCD.setNAxis(2);
             Streamer->setPixelFormat(INDI_MONO, 8);
         }
         else
         {
-            PrimaryCCD.setFrameBufferSize(PrimaryCCD.getXRes() * PrimaryCCD.getYRes() * 2);
+            PrimaryCCD.setFrameBufferSize(width * height * 2);
             PrimaryCCD.setBPP(16);
             PrimaryCCD.setNAxis(2);
             Streamer->setPixelFormat(INDI_MONO, 16);
@@ -873,21 +890,21 @@ void ToupBase::allocateFrameBuffer()
         if (0 == m_CurrentVideoFormat)
         {
             // RGB24 or RGB888
-            PrimaryCCD.setFrameBufferSize(PrimaryCCD.getXRes() * PrimaryCCD.getYRes() * 3);
+            PrimaryCCD.setFrameBufferSize(width * height * 3);
             PrimaryCCD.setBPP(8);
             PrimaryCCD.setNAxis(3);
             Streamer->setPixelFormat(INDI_RGB, 8);
         }
         else
         {
-            PrimaryCCD.setFrameBufferSize(PrimaryCCD.getXRes() * PrimaryCCD.getYRes() * m_BitsPerPixel / 8);
+            PrimaryCCD.setFrameBufferSize(width * height * m_BitsPerPixel / 8);
             PrimaryCCD.setBPP(m_BitsPerPixel);
             PrimaryCCD.setNAxis(2);
             Streamer->setPixelFormat(m_CameraPixelFormat, m_BitsPerPixel);
         }
     }
 
-    Streamer->setSize(PrimaryCCD.getXRes(), PrimaryCCD.getYRes());
+    Streamer->setSize(width, height);
 }
 
 bool ToupBase::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
@@ -1496,6 +1513,51 @@ bool ToupBase::ISNewSwitch(const char *dev, const char *name, ISState *states, c
         }
 
         //////////////////////////////////////////////////////////////////////
+        /// RealTime Frame Buffer Mode
+        //////////////////////////////////////////////////////////////////////
+        if (m_RealTimeSP.isNameMatch(name))
+        {
+            int prevIndex = m_RealTimeSP.findOnSwitchIndex();
+            if (m_RealTimeSP.isUpdated(states, names, n))
+            {
+                m_RealTimeSP.update(states, names, n);
+                int realtimeMode = m_RealTimeSP.findOnSwitchIndex();
+
+                // Only apply to hardware if currently streaming (video mode)
+                if (Streamer->isBusy())
+                {
+                    HRESULT rc = FP(put_RealTime(m_Handle, realtimeMode));
+                    if (SUCCEEDED(rc))
+                    {
+                        m_RealTimeSP.setState(IPS_OK);
+                        LOGF_INFO("Frame buffer mode changed to: %s", m_RealTimeSP.findOnSwitch()->getLabel());
+                    }
+                    else
+                    {
+                        LOGF_ERROR("Failed to set frame buffer mode. %s", errorCodes(rc).c_str());
+                        m_RealTimeSP.setState(IPS_ALERT);
+                        m_RealTimeSP.reset();
+                        m_RealTimeSP[prevIndex].setState(ISS_ON);
+                    }
+                }
+                else
+                {
+                    m_RealTimeSP.setState(IPS_OK);
+                    LOG_INFO("Frame buffer mode will be applied when streaming starts.");
+                }
+
+                m_RealTimeSP.apply();
+                saveConfig(m_RealTimeSP);
+            }
+            else
+            {
+                m_RealTimeSP.setState(IPS_OK);
+                m_RealTimeSP.apply();
+            }
+            return true;
+        }
+
+        //////////////////////////////////////////////////////////////////////
         /// Heat
         //////////////////////////////////////////////////////////////////////
         if (m_HeatSP.isNameMatch(name))
@@ -1531,6 +1593,14 @@ bool ToupBase::ISNewSwitch(const char *dev, const char *name, ISState *states, c
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 bool ToupBase::StartStreaming()
 {
+    // Re-apply current binning to hardware before streaming.
+    // This ensures the SDK uses the correct binning even if it was changed
+    // by another module (e.g., capture module set 2x2, guide module expects 1x1).
+    updateBinningMode(PrimaryCCD.getBinX(), m_BinningMode);
+
+    // Ensure frame buffer and streamer size are correct for current binning
+    allocateFrameBuffer();
+
     const uint32_t uSecs = static_cast<uint32_t>(1000000.0f / Streamer->getTargetFPS());
     HRESULT rc = FP(put_ExpoTime(m_Handle, uSecs));
     if (FAILED(rc))
@@ -1546,6 +1616,17 @@ bool ToupBase::StartStreaming()
         return false;
     }
     m_CurrentTriggerMode = TRIGGER_VIDEO;
+
+    // Apply realtime frame buffer mode if enabled
+    int realtimeMode = m_RealTimeSP.findOnSwitchIndex();
+    if (realtimeMode != TC_REALTIME_OFF)
+    {
+        rc = FP(put_RealTime(m_Handle, realtimeMode));
+        if (FAILED(rc))
+            LOGF_ERROR("Failed to set realtime frame buffer mode. %s", errorCodes(rc).c_str());
+        else
+            LOGF_INFO("Frame buffer mode set to: %s", m_RealTimeSP.findOnSwitch()->getLabel());
+    }
 
     return true;
 }
@@ -1728,13 +1809,19 @@ bool ToupBase::UpdateCCDFrame(int x, int y, int w, int h)
     // Set UNBINNED coords
     PrimaryCCD.setFrame(x, y, w, h);
 
-    // Total bytes required for image buffer
-    uint32_t nbuf = (w * h * PrimaryCCD.getBPP() / 8) * m_Channels;
-    LOGF_DEBUG("Updating frame buffer size to %d bytes", nbuf);
+    // Total bytes required for image buffer.
+    // With digital binning active, the SDK delivers (w/binX * h/binY) pixels,
+    // so the buffer must be sized for the binned dimensions.
+    uint32_t binX = PrimaryCCD.getBinX();
+    uint32_t binY = PrimaryCCD.getBinY();
+    uint32_t binW = w / binX;
+    uint32_t binH = h / binY;
+    uint32_t nbuf = (binW * binH * PrimaryCCD.getBPP() / 8) * m_Channels;
+    LOGF_DEBUG("Updating frame buffer size to %d bytes (binned %dx%d)", nbuf, binW, binH);
     PrimaryCCD.setFrameBufferSize(nbuf);
 
-    // Always set BINNED size
-    Streamer->setSize(w / PrimaryCCD.getBinX(), h / PrimaryCCD.getBinY());
+    // Always set BINNED size for the streamer
+    Streamer->setSize(binW, binH);
     return true;
 }
 
@@ -1803,6 +1890,11 @@ void ToupBase::TimerHit()
             LOG_ERROR("Exposure timed out waiting for image frame.");
             InExposure = false;
             PrimaryCCD.setExposureFailed();
+            LOG_ERROR("Exposure timed out - flushing to unlock camera.");
+            if(FAILED(FP(put_Option(m_Handle, CP(OPTION_FLUSH), 3))))
+            {
+                LOG_ERROR("Failed to flush camera after exposure timeout.");
+            }
         }
     }
 
@@ -2039,6 +2131,12 @@ void ToupBase::addFITSKeywords(INDI::CCDChip * targetChip, std::vector<INDI::FIT
         fitsKeywords.push_back({"LOWNOISE", m_LowNoiseSP[INDI_ENABLED].getState() == ISS_ON ? "ON" : "OFF", "Low Noise"});
     if (m_Instance->model->flag & CP(FLAG_HIGH_FULLWELL))
         fitsKeywords.push_back({"FULLWELL", m_HighFullwellSP[INDI_ENABLED].getState() == ISS_ON ? "ON" : "OFF", "High Fullwell"});
+    if (m_Instance->model->flag & (CP(FLAG_CG) | CP(FLAG_CGHDR)))
+    {
+        auto onConversionGain = m_ConversionGainSP.findOnSwitch();
+        if (onConversionGain)
+            fitsKeywords.push_back({"CONVGAIN", onConversionGain->getLabel(), "Conversion Gain"});
+    }
     fitsKeywords.push_back({"SN", m_CameraTP[TC_CAMERA_SN].getText(), "Serial Number"});
     fitsKeywords.push_back({"PRODATE", m_CameraTP[TC_CAMERA_DATE].getText(), "Production Date"});
     fitsKeywords.push_back({"FIRMVER", m_CameraTP[TC_CAMERA_FW_VERSION].getText(), "Firmware Version"});
@@ -2085,6 +2183,7 @@ bool ToupBase::saveConfigItems(FILE * fp)
     m_BBAutoSP.save(fp);
     if (m_Instance->model->flag & CP(FLAG_HEAT))
         m_HeatSP.save(fp);
+    m_RealTimeSP.save(fp);
 
     return true;
 }
@@ -2218,7 +2317,12 @@ void ToupBase::eventCallBack(unsigned event)
             break;
         case CP(EVENT_NOFRAMETIMEOUT):
             LOG_ERROR("Camera timed out");
-            PrimaryCCD.setExposureFailed();
+            if (InExposure)
+            {
+                InExposure = false;
+                PrimaryCCD.setExposureLeft(0);
+                PrimaryCCD.setExposureFailed();
+            }
             break;
         default:
             break;
@@ -2254,7 +2358,7 @@ bool ToupBase::SetCaptureFormat(uint8_t index)
             return false;
         }
 
-        m_BitsPerPixel = index ? 8 : 16;
+        m_BitsPerPixel = index ? 16 : 8;
     }
     // Color
     else

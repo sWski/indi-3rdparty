@@ -107,7 +107,8 @@ bool MaxDomeII::initProperties()
 
     // Shutter operation position
     ShutterOperationAzimuthNP[0].fill("SOp_AZIMUTH", "Azimuth", "%5.2f", 0., 360., 0., nShutterOperationPosition);
-    ShutterOperationAzimuthNP.fill(getDeviceName(), "SHUTTER_OPERATION_AZIMUTH", "Shutter operation azimuth", OPTIONS_TAB, IP_RW, 0,
+    ShutterOperationAzimuthNP.fill(getDeviceName(), "SHUTTER_OPERATION_AZIMUTH", "Shutter operation azimuth", OPTIONS_TAB,
+                                   IP_RW, 0,
                                    IPS_IDLE);
 
     // Move to a shutter operation position before moving shutter?
@@ -132,6 +133,21 @@ bool MaxDomeII::initProperties()
     WatchDogNP.fill(getDeviceName(), "WATCH_DOG_TIME_SET",
                     "Watch dog time set", OPTIONS_TAB, IP_RW, 0, IPS_IDLE);
 
+    // Rotation Sensor Debounce (Advanced Settings)
+    // Each sample is 10 ms; payload = ms / 10. Default = 120 ms (12 samples).
+    RotationDebounceTimeSP[DEBOUNCE_10MS ].fill("DEBOUNCE_10MS",  "10 ms",  ISS_OFF);
+    RotationDebounceTimeSP[DEBOUNCE_20MS ].fill("DEBOUNCE_20MS",  "20 ms",  ISS_OFF);
+    RotationDebounceTimeSP[DEBOUNCE_30MS ].fill("DEBOUNCE_30MS",  "30 ms",  ISS_OFF);
+    RotationDebounceTimeSP[DEBOUNCE_40MS ].fill("DEBOUNCE_40MS",  "40 ms",  ISS_OFF);
+    RotationDebounceTimeSP[DEBOUNCE_60MS ].fill("DEBOUNCE_60MS",  "60 ms",  ISS_OFF);
+    RotationDebounceTimeSP[DEBOUNCE_80MS ].fill("DEBOUNCE_80MS",  "80 ms",  ISS_OFF);
+    RotationDebounceTimeSP[DEBOUNCE_120MS].fill("DEBOUNCE_120MS", "120 ms", ISS_ON);
+    RotationDebounceTimeSP[DEBOUNCE_150MS].fill("DEBOUNCE_150MS", "150 ms", ISS_OFF);
+    RotationDebounceTimeSP[DEBOUNCE_200MS].fill("DEBOUNCE_200MS", "200 ms", ISS_OFF);
+    RotationDebounceTimeSP[DEBOUNCE_250MS].fill("DEBOUNCE_250MS", "250 ms", ISS_OFF);
+    RotationDebounceTimeSP.fill(getDeviceName(), "ROTATION_SENSOR_DEBOUNCE",
+                                "Rotation Sensor Debounce", OPTIONS_TAB, IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
+
     // Set default baud rate to 19200
     serialConnection->setDefaultBaudRate(Connection::Serial::B_19200);
 
@@ -151,6 +167,7 @@ bool MaxDomeII::updateProperties()
         defineProperty(ShutterModeSP);
         defineProperty(HomeSP);
         defineProperty(WatchDogNP);
+        defineProperty(RotationDebounceTimeSP);
 
         SetupParms();
     }
@@ -163,6 +180,7 @@ bool MaxDomeII::updateProperties()
         deleteProperty(ShutterModeSP);
         deleteProperty(HomeSP);
         deleteProperty(WatchDogNP);
+        deleteProperty(RotationDebounceTimeSP);
     }
 
     return true;
@@ -175,6 +193,7 @@ bool MaxDomeII::saveConfigItems(FILE *fp)
     ShutterOperationAzimuthNP.save(fp);
     ShutterConflictSP.save(fp);
     ShutterModeSP.save(fp);
+    RotationDebounceTimeSP.save(fp);
 
     return INDI::Dome::saveConfigItems(fp);
 }
@@ -833,6 +852,42 @@ bool MaxDomeII::ISNewSwitch(const char *dev, const char *name, ISState *states, 
         return true;
     }
 
+    // ===================================
+    // Rotation Sensor Debounce
+    // ===================================
+    if (RotationDebounceTimeSP.isNameMatch(name))
+    {
+        if (RotationDebounceTimeSP.update(states, names, n) == false)
+            return false;
+
+        // Map each switch index to its debounce time in milliseconds
+        static const int debounceValues[] = { 10, 20, 30, 40, 60, 80, 120, 150, 200, 250 };
+
+        int selectedIndex = RotationDebounceTimeSP.findOnSwitchIndex();
+        int debounceMs    = debounceValues[selectedIndex];
+
+        int error  = 0;
+        int nRetry = 3;
+        while (nRetry)
+        {
+            error = driver.SetDebounceTime(debounceMs);
+            handle_driver_error(&error, &nRetry);
+        }
+
+        if (error == 0)
+        {
+            RotationDebounceTimeSP.setState(IPS_OK);
+            LOGF_INFO("Rotation sensor debounce time set to %d ms", debounceMs);
+        }
+        else
+        {
+            RotationDebounceTimeSP.setState(IPS_ALERT);
+            LOGF_ERROR("Failed to set rotation sensor debounce time (%s)", ErrorMessages[abs(error)]);
+        }
+        RotationDebounceTimeSP.apply();
+        return true;
+    }
+
     return INDI::Dome::ISNewSwitch(dev, name, states, names, n);
 }
 
@@ -1032,15 +1087,7 @@ IPState MaxDomeII::Park()
     LOGF_INFO("Parking to %.2f azimuth...", targetAz);
     MoveAbs(targetAz);
 
-    if (HasShutter() && ShutterParkPolicySP[SHUTTER_CLOSE_ON_PARK].getState() == ISS_ON)
-    {
-        LOG_INFO("Closing shutter on parking...");
-        ControlShutter(ShutterOperation::SHUTTER_CLOSE);
-        DomeShutterSP[SHUTTER_OPEN].setState(ISS_OFF);
-        DomeShutterSP[SHUTTER_CLOSE].setState(ISS_ON);
-        setShutterState(SHUTTER_MOVING);
-    }
-
+    // The shutter is closed by INDI::Dome according to the shutter park policy.
     return IPS_BUSY;
 }
 
@@ -1060,13 +1107,6 @@ IPState MaxDomeII::UnPark()
     nTimeSinceAzimuthStart = 0;
     nTargetAzimuth         = -1;
 
-    if (HasShutter() && ShutterParkPolicySP[SHUTTER_OPEN_ON_UNPARK].getState() == ISS_ON)
-    {
-        LOG_INFO("Opening shutter on unparking...");
-        ControlShutter(ShutterOperation::SHUTTER_OPEN);
-        DomeShutterSP[SHUTTER_OPEN].setState(ISS_ON);
-        DomeShutterSP[SHUTTER_CLOSE].setState(ISS_OFF);
-        setShutterState(SHUTTER_MOVING);
-    }
+    // The shutter is opened by INDI::Dome according to the shutter park policy.
     return IPS_BUSY;
 }
